@@ -4,8 +4,26 @@
 using Markdown
 using InteractiveUtils
 
+# ╔═╡ f4a03d13-c8ce-4a00-99da-4ad5eb51c763
+using ControlSystems,PlutoUI
+
 # ╔═╡ 52a3a292-ea00-11ef-2cc9-89572f3efeeb
 using ModelingToolkit, DifferentialEquations, CoolProp, Plots
+
+# ╔═╡ e9ffb64f-1832-4ce4-9c39-ac23be2e7c18
+using ModelingToolkitStandardLibrary
+
+# ╔═╡ 7c65481c-8ab1-4620-a35a-d26ee0e26c16
+using ModelingToolkitStandardLibrary.Blocks
+
+# ╔═╡ b34531cd-9001-466f-8cd1-532a9573bb80
+using ModelingToolkitStandardLibrary.Thermal
+
+# ╔═╡ 594eadeb-2501-4c68-8a3b-628381e8d1c3
+using ModelingToolkitStandardLibrary.Mechanical.Rotational
+
+# ╔═╡ 700edb28-78b6-432e-9b9c-4a7ec8c49ce7
+using MacroTools
 
 # ╔═╡ 681d82e9-c12e-452b-806f-e5e65c63c509
 @independent_variables t
@@ -91,6 +109,343 @@ end
 # ╔═╡ 950fcd30-957e-4825-a234-55e2b86cf0bd
 @register_symbolic R_air()
 
+# ╔═╡ f7cd13d7-d88a-4803-9e8f-b29c1737ddeb
+const compressor_data = Dict{Float64, Vector{Tuple{Float64,Float64,Union{Missing,Float64}}}}()
+
+# ╔═╡ cf7cf70b-5057-4bce-9ae2-66a6783f4ccc
+compressor_data[1268.0] = [
+    (0.00001285189718482252, 1.0724754641523306, missing),  # SURGE
+    (0.00001597307221542228, 1.1089149528562015, missing),
+    (0.000018543451652386777, 1.1362305585071795, missing),
+    (0.00002184822521419829,  1.1543438201944936, missing),
+    (0.000025336597307221543, 1.14497334570774,   missing),
+    (0.000028274173806609547, 1.1356364973256028, missing),
+    (0.000030660954712362296, 1.1263332750480846, missing),
+    (0.0000335985312117503,   1.09868140835093,   missing),
+    (0.00003671970624235006,  1.0893333512672552, missing),
+    (0.000040208078335373316, 1.0524903493079742, missing)   # CHOKE
+]
+
+# ╔═╡ 940ececc-6ddc-4efd-a988-a73a782daed6
+compressor_data[2114.0] = [
+    (0.000021664626682986532, 1.4290803036213058, missing),  # SURGE
+    (0.000025336597307221543, 1.4654861662205594, missing),
+    (0.000029375764993880046, 1.5018696114167343, missing),
+    (0.0000335985312117503,   1.5382418479113698, 0.74),
+    (0.00003818849449204407,  1.537961630372891,  0.74),
+    (0.00004314565483476132,  1.5376589954313324, 0.76),
+    (0.000047184822521419824, 1.5190973856824526, 0.76),
+    (0.00004975520195838433,  1.5006254455458858, 0.74),
+    (0.00005361077111383108,  1.4637600261835253, missing),
+    (0.000056548347613219095, 1.399478122856335,  missing)  # CHOKE
+]
+
+# ╔═╡ 28795617-694c-40ac-87c5-07afe309c3c0
+compressor_data[2537.0] = [
+    (0.0000317625458996328,  1.7672916638644907, missing),  # SURGE
+    (0.00003818849449204407, 1.8584744508857112, missing),
+    (0.000044063647490820076, 1.8672732815939659, 0.74),
+    (0.00004810281517747859,  1.8853417084751234, 0.76),
+    (0.00005269277845777234, 1.8667464726216245, 0.77),
+    (0.000057649938800489594, 1.866443837680067,  0.77),
+    (0.00006132190942472459, 1.8295896270192467, 0.76),
+    (0.00006334149326805386, 1.801993803829789,  0.74),
+    (0.0000660954712362301,  1.7651956366766646, missing),
+    (0.00006701346389228886, 1.7101945382239139, missing)   # CHOKE
+]
+
+# ╔═╡ 39a53894-fb03-43ac-92fd-b18e8330fb71
+compressor_data[2960.0] = [
+    (0.000045716034271725825, 2.3067328428405536, missing),
+    (0.00004975520195838433,  2.3248012697217098, missing),
+    (0.00005305997552019584,  2.3520720405665325,  0.74),
+    (0.000056548347613219095, 2.3701740935523063,  0.76),
+    (0.0000624235006119951,   2.3606579059455433,  0.77),
+    (0.00006995104039167687,  2.33272582170991,    0.78),
+    (0.00007619339045287636,  2.277399670912523,   0.77),
+    (0.00007931456548347615,  2.249736595513829,   0.76),
+    (0.00008078335373317014,  2.2130168892714788,  0.74),
+    (0.00008151774785801713,  2.1397119812052487,  missing)
+]
+
+# ╔═╡ 0a2dd6a6-8d5c-4ca7-b78e-af2caba958f5
+compressor_data[3382.0] = [
+    (0.00006407588739290086, 2.9924251594998226, missing),
+    (0.0000660954712362301,  2.9923018637828918,  0.74),
+    (0.00006866585067319461, 3.0013024511188524,  0.76),
+    (0.00007288861689106487, 3.001044650983451,   0.77),
+    (0.00008133414932680537, 2.99137154155514,    0.78),
+    (0.0000901468788249694,  2.9358884689362044,  0.78),
+    (0.00009694002447980415, 2.834741146246654,   0.77),
+    (0.00009877600979192166, 2.7888415134437166,  0.76),
+    (0.00009987760097919216, 2.7429867154469356,  0.74),
+    (0.00010006119951040393, 2.6788729426428324,  missing)
+]
+
+# ╔═╡ ba20246e-6791-465a-be88-971478a803b8
+compressor_data[3805.0] = [
+    (0.0000861077111383109,  3.9068310310660372, missing),
+    (0.00008886168910648714, 3.9066629005429494,  0.77),
+    (0.0000927172582619339,  3.915585026968136,   0.78),
+    (0.00009840881272949816, 3.896922538905403,   0.79),
+    (0.00011346389228886169, 3.7403257697015344,  0.79),
+    (0.00011988984088127294, 3.6208858461000446,  0.78),
+    (0.0001226438188494492,  3.5474576423168833,  0.77),
+    (0.00012319461444308447, 3.492478961267211,   0.76),
+    (0.00012319461444308447, 3.428376397164646,   0.74),
+    (0.00012319461444308447, 3.355116323904573,   missing)
+]
+
+# ╔═╡ 54f02467-88d4-4f52-9714-2f7f8e4f8396
+compressor_data[4017.0] = [
+    (0.00009969400244798041, 4.473767154917706,  missing),
+    (0.00010520195838433294, 4.47343089387153,   0.78),
+    (0.00011052631578947369, 4.436475804896857,   0.79),
+    (0.00011438188494492043, 4.399610385534498,   0.79),
+    (0.00011842105263157894, 4.35357624831309,    0.79),
+    (0.00012356181150550795, 4.261687313094901,   0.78),
+    (0.00012870257037943698, 4.169798377876713,   0.78),
+    (0.00013347613219094249, 4.096246878376622,   0.77),
+    (0.00013531211750305997, 4.013717208943647,   0.76),
+    (0.00013567931456548348, 3.9587497365955135,  missing)
+]
+
+# ╔═╡ 3d4df8ce-ba49-41e7-923f-b6c6503d7ec7
+compressor_data[4228.0] = [
+    (0.00011328029375764992, 5.113963352029447,  missing),
+    (0.00011658506731946143, 5.113761595401742,  0.78),
+    (0.00012025703794369645, 5.09522240305594,   0.78),
+    (0.00012539779681762546, 5.058278522782807,  0.79),
+    (0.00013017135862913097, 4.984727023282715,  0.79),
+    (0.00013476132190942474, 4.92950175079918,   0.78),
+    (0.000141187270501836,   4.828376845512708,  0.78),
+    (0.00014577723378212973, 4.745679045556646,  0.77),
+    (0.00014724602203182376, 4.727274357629315,  0.76),
+    (0.00014889840881272953, 4.708858461000444,  missing)
+]
+
+# ╔═╡ 3d270fd8-7bc5-43ea-861f-ab272d67a81d
+compressor_data[4440.0] = [
+    (0.0001305385556915545, 5.790565411740443, missing),
+    (0.00013237454100367197, 5.790453324725051, 0.76),
+    (0.00013457772337821297, 5.790318820306581, 0.76),
+    (0.00013696450428396574, 5.808488125501589, 0.76),
+    (0.000139718482252142,   5.799162485820993, 0.76),
+    (0.00014247246022031825, 5.780679336982887, 0.76),
+    (0.0001452264381884945, 5.753038678987272, 0.76),
+    (0.0001474296205630355, 5.716274137938765, 0.76),
+    (0.00014926560587515301, 5.707004541765864, 0.76),
+    (0.00015018359853121176, 5.642845934155604, missing)
+]
+
+# ╔═╡ fc42f8f0-31e4-4cf9-a5e8-64821759fe00
+const turbine_data = Dict{Float64, Vector{Tuple{Float64,Float64,Union{Missing,Float64}}}}()
+
+# ╔═╡ 8d03bbe8-c208-4e5b-86f3-2c769efc3d99
+turbine_data[834.0] = [
+    (0.000050027739251040225, 1.3574468085106384, missing),
+    (0.00005321775312066574,  1.4255319148936172, missing),
+    (0.00005560332871012482,  1.4680851063829792, 0.82),
+    (0.00005907073509015256,  1.527659574468085,  0.80),
+    (0.00006223300970873787,  1.6638297872340422, 0.80),
+    (0.00006364771151178918,  1.7319148936170214, missing),
+    (0.00006478502080443827,  1.7914893617021281, missing),
+    (0.00006597780859916782,  1.902127659574468,  missing),
+    (0.00006783633841886268,  2.234042553191489,  missing),
+    (0.00006858529819694868,  2.6936170212765957, missing)
+]
+
+# ╔═╡ ca4f8091-b784-4665-8713-a561e65ee4bb
+turbine_data[1112.0] = [
+    (0.00005,                  1.4340425531914893, 0.82),
+    (0.000051608876560332875,  1.4680851063829792, 0.83),
+    (0.000054133148404993066,  1.4936170212765956, 0.83),
+    (0.00005748959778085992,   1.5957446808510638, 0.82),
+    (0.00006059639389736477,   1.6808510638297873, 0.82),
+    (0.0000639251040221914,    1.8765957446808512, 0.82),
+    (0.00006556171983356449,   2.021276595744681,  0.82),
+    (0.0000667267683772538,    2.174468085106383,  0.80),
+    (0.00006805825242718445,   2.497872340425532,  0.80),
+    (0.00006858529819694868,   3.068085106382979,  missing)
+]
+
+# ╔═╡ 20996f8e-1c0d-4efe-b1ad-90b69bb0e41d
+turbine_data[1389.0] = [
+    (0.00005005547850208045, 1.527659574468085,  missing),
+    (0.0000520249653259362,  1.578723404255319,  0.80),
+    (0.00005407766990291262, 1.6297872340425532, 0.82),
+    (0.00005565880721220527, 1.6723404255319148, 0.84),
+    (0.000058377253814147014,1.7574468085106383, 0.845),
+    (0.00006181692094313453, 1.9191489361702128, 0.84),
+    (0.00006470180305131761, 2.123404255319149,  0.83),
+    (0.00006636615811373092, 2.3361702127659574,  0.83),
+    (0.00006816920943134534, 2.8127659574468087,  0.82),
+    (0.0000686130374479889,  3.3148936170212764,  0.82)
+]
+
+# ╔═╡ 31ea7715-c1a6-44a4-94b3-a00ffd016622
+turbine_data[1528.0] = [
+    (0.00005,                  1.5872340425531917, missing),
+    (0.00005299583911234397,  1.6553191489361705, missing),
+    (0.00005507628294036061,  1.7234042553191489, 0.80),
+    (0.00005718446601941747,  1.8085106382978724, 0.82),
+    (0.00005976421636615811,  1.9106382978723406, 0.83),
+    (0.0000611511789181692,   1.9787234042553195, 0.84),
+    (0.0000643134535367545,   2.2170212765957444, 0.845),
+    (0.00006664355062413314,  2.5319148936170213, 0.84),
+    (0.00006797503467406379,  2.991489361702128,  0.83),
+    (0.00006847434119278779,  3.561702127659575,  0.82)
+]
+
+# ╔═╡ 56b8d818-b827-4cb5-a876-dec2cf90262a
+turbine_data[1667.0] = [
+    (0.00005008321775312067, 1.6638297872340422, missing),
+    (0.00005252427184466019, 1.7319148936170214, missing),
+    (0.0000567128987517337,  1.8765957446808512, 0.80),
+    (0.00005973647711511789, 2.0127659574468084,  0.82),
+    (0.0000614008321775312,  2.106382978723404,   0.83),
+    (0.00006270457697642164, 2.2085106382978723,  0.84),
+    (0.00006453536754507627, 2.3872340425531915,  0.845),
+    (0.00006766990291262136, 3.093617021276596,   0.84),
+    (0.00006819694868238557, 3.4680851063829787,  0.83),
+    (0.00006841886269070734, 3.851063829787234,   0.82)
+]
+
+# ╔═╡ ce852633-8bce-4491-96c2-d11281cfad77
+turbine_data[1806.0] = [
+    (0.00005,                  1.740425531914894,  missing),
+    (0.000057212205270457696, 2.0042553191489363, missing),
+    (0.00005998613037447989,  2.157446808510638,  0.80),
+    (0.00006173370319001387,  2.2680851063829786, 0.82),
+    (0.00006339805825242718,  2.4297872340425535, 0.83),
+    (0.00006481276005547849,  2.608510638297872,  0.84),
+    (0.00006661581137309292,  2.9829787234042553, 0.845),
+    (0.00006750346740638002,  3.3404255319148937, 0.84),
+    (0.00006794729542302357,  3.723404255319149,  0.83),
+    (0.00006816920943134534,  4.174468085106383,  0.82)
+]
+
+# ╔═╡ cee71cb3-fa16-4e49-aa77-a9d072eae968
+turbine_data[1945.0] = [
+    (0.000050027739251040225, 1.817021276595745,  missing),
+    (0.000060069348127600556, 2.293617021276596,  missing),
+    (0.00006142857142857142,  2.404255319148936,  missing),
+    (0.00006356449375866852,  2.625531914893617,  0.80),
+    (0.00006500693481276004,  2.8382978723404255, 0.82),
+    (0.00006656033287101248,  3.246808510638298,  0.83),
+    (0.00006758668515950068,  3.902127659574468,  0.83),
+    (0.00006778085991678224,  4.174468085106383,  0.83),
+    (0.00006786407766990291,  4.497872340425532,  0.82),
+    (0.0000558252427184466,   2.046808510638298,  missing)
+]
+
+# ╔═╡ 0f23b8bd-241e-4681-af0d-d3927b5527f8
+turbine_data[2084.0] = [
+    (0.00005,                  1.9106382978723406, missing),
+    (0.00005876560332871012,  2.353191489361702,  missing),
+    (0.00006217753120665742,  2.676595744680851,  missing),
+    (0.0000650624133148405,   3.1702127659574466, 0.80),
+    (0.00006633841886269071,  3.578723404255319,  0.82),
+    (0.00006692094313453536,  4.089361702127659,  0.83),
+    (0.00006728155339805825,  4.617021276595745,  0.82),
+    (0.00005446601941747573,  2.1148936170212767, missing)
+]
+
+# ╔═╡ 72581724-0ca3-4e63-adfb-169d49d4599c
+function _interp1D_fromPressure(data::Vector{Tuple{Float64,Float64,Union{Missing,Float64}}}, target_pi::Float64)
+    # Hanya gunakan data dengan π dan η valid
+    valid = filter(d -> d[2] !== missing && d[3] !== missing, data)
+    if isempty(valid)
+        return (missing, missing)
+    end
+    sorted_valid = sort(valid, by = d -> d[2])  # urut berdasarkan pressure ratio
+    pis    = [d[2] for d in sorted_valid]
+    mflows = [d[1] for d in sorted_valid]
+    effs   = [d[3] for d in sorted_valid]
+    if target_pi <= pis[1]
+        return (mflows[1], effs[1])
+    elseif target_pi >= pis[end]
+        return (mflows[end], effs[end])
+    else
+        idx = searchsortedlast(pis, target_pi)
+        p1, p2 = pis[idx], pis[idx+1]
+        m1, m2 = mflows[idx], mflows[idx+1]
+        e1, e2 = effs[idx], effs[idx+1]
+        w = (target_pi - p1)/(p2 - p1)
+        return (m1*(1-w) + m2*w, e1*(1-w) + e2*w)
+    end
+end
+
+# ╔═╡ 85de18ca-53e0-4b22-a569-8c99ed8a5fa9
+function _interp2D_fromPressure_compressor(Nred::Float64, target_pi::Float64)
+    speed_lines = sort(collect(keys(compressor_data)))
+    if Nred <= speed_lines[1]
+        return _interp1D_fromPressure(compressor_data[speed_lines[1]], target_pi)
+    elseif Nred >= speed_lines[end]
+        return _interp1D_fromPressure(compressor_data[speed_lines[end]], target_pi)
+    else
+        idx = searchsortedlast(speed_lines, Nred)
+        s1 = speed_lines[idx]
+        s2 = speed_lines[idx+1]
+        m1, e1 = _interp1D_fromPressure(compressor_data[s1], target_pi)
+        m2, e2 = _interp1D_fromPressure(compressor_data[s2], target_pi)
+        w = (Nred - s1)/(s2 - s1)
+        return (m1*(1-w) + m2*w, e1*(1-w) + e2*w)
+    end
+end
+
+# ╔═╡ 3452a3e3-4bde-42de-87b4-abed90a08aa7
+function _interp2D_fromPressure_turbine(Nred::Float64, target_pi::Float64)
+    speed_lines = sort(collect(keys(turbine_data)))
+    if Nred <= speed_lines[1]
+        return _interp1D_fromPressure(turbine_data[speed_lines[1]], target_pi)
+    elseif Nred >= speed_lines[end]
+        return _interp1D_fromPressure(turbine_data[speed_lines[end]], target_pi)
+    else
+        idx = searchsortedlast(speed_lines, Nred)
+        s1 = speed_lines[idx]
+        s2 = speed_lines[idx+1]
+        m1, e1 = _interp1D_fromPressure(turbine_data[s1], target_pi)
+        m2, e2 = _interp1D_fromPressure(turbine_data[s2], target_pi)
+        w = (Nred - s1)/(s2 - s1)
+        return (m1*(1-w) + m2*w, e1*(1-w) + e2*w)
+    end
+end
+
+# ╔═╡ 43523756-f44e-4122-bac3-f6e33f01cd33
+function compressorMap_fromPressure(Nred, target_pi)
+    return _interp2D_fromPressure_compressor(Nred, target_pi)
+end
+
+# ╔═╡ e529612f-a8c5-404e-9342-1ad7ad9bc50c
+function turbineMap_fromPressure(Nred, target_pi)
+    return _interp2D_fromPressure_turbine(Nred, target_pi)
+end
+
+# ╔═╡ 0ff5bcab-0389-497b-a254-eb5bdac6e1d5
+compressor_m(Nred, target_pi) = compressorMap_fromPressure(Nred, target_pi)[1]
+
+# ╔═╡ f7797164-99df-4fd6-92e5-3dd76a8a8f36
+compressor_η(Nred, target_pi) = compressorMap_fromPressure(Nred, target_pi)[2]
+
+# ╔═╡ d4b88261-657f-447c-989e-ef43e7c0d07e
+turbine_m(Nred, π_t) = turbineMap_fromPressure(Nred, π_t)[1]
+
+# ╔═╡ 1d1d961b-1dbd-4d63-a8da-1f7b3a2e9df4
+turbine_η(Nred, π_t) = turbineMap_fromPressure(Nred, π_t)[2]
+
+# ╔═╡ 5d5165cf-d7ee-4650-b28a-744aa44ca75b
+@register_symbolic compressor_m(Nred, target_pi)
+
+# ╔═╡ 17d864a3-e4e5-4136-ae14-9fa41ba73659
+@register_symbolic compressor_η(Nred, target_pi)
+
+# ╔═╡ 14d7aa68-928b-46c6-8caa-01e515f610ce
+@register_symbolic turbine_m(Nred, π_t)
+
+# ╔═╡ e317faa2-01ab-4856-b63e-56e3282fe06d
+@register_symbolic turbine_η(Nred, π_t)
+
 # ╔═╡ 75e4bf3a-241e-4a4f-8120-2df2b909ef68
 @connector  function Port(;name) 
 vars = @variables begin 
@@ -121,16 +476,101 @@ function Source(;name,source_temperature, source_pressure,source_mdot, source_po
     compose(ODESystem(eqs, t, vars, para;name),port)
 end
 
+# ╔═╡ d5451d65-9573-483b-b9fe-a79a870e7035
+@connector  function PressurePort(;name) 
+vars = @variables begin 
+    p(t)
+end
+ODESystem(Equation[], t, vars, [];name=name)
+end
+
+# ╔═╡ 5011f9bf-d2a8-4ea1-8380-e703ddd45993
+function SourcePressure(;name,source_pressure) 
+    @named PresPort = PressurePort()
+    para = @parameters begin
+        
+    end
+    vars = @variables begin
+		p(t), [input = true]
+     end
+
+    eqs = [
+        PresPort.p ~ source_pressure
+    ]
+    compose(ODESystem(eqs, t, vars, para;name), PresPort)
+end
+
+# ╔═╡ acbae539-2b69-42b5-b8c5-5a818e9e3f09
+@connector  function TemperaturePort(;name) 
+vars = @variables begin 
+	T(t)
+end
+ODESystem(Equation[], t, vars, [];name=name)
+end
+
+# ╔═╡ cf29de7c-0e1f-46d3-878a-7e5ad3596101
+function SourceTemperature(;name,source_temperature) 
+    @named TempPort = TemperaturePort()
+    para = @parameters begin
+        
+    end
+    vars = @variables begin
+		T(t), [input = true]
+     end
+
+    eqs = [
+		TempPort.T ~ source_temperature
+    ]
+    compose(ODESystem(eqs, t, vars, para;name), TempPort)
+end
+
+# ╔═╡ e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
+function WasteHeat(;name) 
+    @named    TempPort = TemperaturePort()
+    para = @parameters begin
+        
+    end
+    vars = @variables begin
+		T(t)
+     end
+
+   eqs = [
+		T ~ TempPort.T
+   ]
+   compose(ODESystem(eqs, t, vars, para;name), TempPort)
+end
+
+# ╔═╡ 91f82fef-eddf-4715-8576-73efd65bbae9
+@connector  function PowerPort(;name) 
+vars = @variables begin 
+	P(t)
+end
+ODESystem(Equation[], t, vars, [];name=name)
+end
+
+# ╔═╡ 672d1b69-0d93-4591-bd87-de76979dc0e4
+@connector  function MassFlowPort(;name) 
+vars = @variables begin 
+    mdot(t)
+end
+ODESystem(Equation[], t, vars, [];name=name)
+end
+
+# ╔═╡ e4fe557b-15ab-4738-8c98-31c61032443d
+@connector  function Shaft(;name) 
+vars = @variables begin 
+    ω(t)
+end
+ODESystem(Equation[], t, vars, [];name=name)
+end
+
 # ╔═╡ d1c1fcb2-8139-483f-b4b5-212d8cbe9697
-function Compressor(;name)
+function Compressor(;name, ṁ_comp = 0.5, η_c_is = 0.85, π_c = 3.0)
 	@named inport = Port()
     @named outport = Port()
 	para = @parameters begin
 		m_cas_comp = 105,   [description = "Mass Casing Compressor (kg)"]
 		c_casing = 500, 	[description = "Specific Heat Casing Compressor (J/kg·K)"]
-		ṁ_comp = 0.4, 		[description = "Mass Flow Rate Compressor (kg/s)"]
-		η_c_is = 0.85, 		[description = "Isentropic Efficiency"]
-		π_c = 2.0, 			[description = "Compressor Pressure Ratio"]
 		κa = cp(inport.T)/cv(inport.T)
 		γ_a = (κa-1) / κa
 	end
@@ -147,32 +587,112 @@ function Compressor(;name)
    compose(ODESystem(eqs, t, vars, para;name), inport, outport)
 end
 
-# ╔═╡ 081c69ab-5e79-4cbd-96d8-dbbe2f092388
-function Recuperator(; name)
-    @named inport_hot = Port()
-    @named inport_cold = Port()
-    @named outport_hot = Port()
-    @named outport_cold = Port()
+# ╔═╡ 6916e5b4-a2a8-417b-9fa0-86b142b71ba3
+function CompressorWithMap(; name, target_pi = 3.0)
+	@named InPresPort = PressurePort()
+	@named InPresPortFromRec = PressurePort()
+	@named InTempPort = TemperaturePort()
+	@named OutPresPort = PressurePort()
+	@named OutTempPort = TemperaturePort()
+	@named OutPowPort = PowerPort()
+	@named OutMdotPort = MassFlowPort()
+    @named shaftin = Shaft()
+
+    para = @parameters begin
+        m_cas_comp = 105,    [description="Mass Casing Compressor (kg)"]
+        c_casing = 500,      [description="Specific Heat Casing (J/kg·K)"]
+        κa = cp(InTempPort.T) / cv(InTempPort.T)
+        γ_a = (κa - 1) / κa
+    end
+
+    vars = @variables begin
+        T2(t),             [description="Casing temperature compressor (K)"]
+        Nred(t),           [description="Reduced speed"]
+        ṁ_comp(t),         [description="Compressor mass flow rate (kg/s)"]
+        η_c_is(t),         [description="Isentropic efficiency of compressor"]
+    end
+
+    eqs = [
+        Nred ~ (60 / (2π)) * (shaftin.ω / sqrt(InTempPort.T)),
+        ṁ_comp ~ compressor_m(Nred, target_pi),  # Gunakan fungsi pembantu
+        η_c_is ~ compressor_η(Nred, target_pi),  # Gunakan fungsi pembantu
+        OutMdotPort.mdot ~ ṁ_comp * (InPresPort.p/sqrt(InTempPort.T)),
+        OutPresPort.p ~ target_pi * (InPresPort.p + InPresPortFromRec.p),
+        OutTempPort.T ~ InTempPort.T * (1 + (1 / η_c_is) * (target_pi^γ_a - 1)),
+        D(T2) ~ (1 / (m_cas_comp * c_casing)) * (OutMdotPort.mdot) * (h( OutPresPort.p, OutTempPort.T) - h( OutPresPort.p, T2)),
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h( OutPresPort.p, OutTempPort.T) - h(InPresPort.p, InTempPort.T))]
+
+    compose(ODESystem(eqs, t, vars, para; name), InPresPort, InPresPortFromRec, InTempPort, OutPresPort, OutTempPort, OutPowPort, OutMdotPort, shaftin)
+end
+
+# ╔═╡ 74574e2a-148e-4f0e-a9c3-856ff0438584
+function TurbineWithMap(; name, π_t = 3.4)
+	@named InPresPortFromCC = PressurePort()
+	@named InPresPortFromRec = PressurePort()
+	@named InTempPort = TemperaturePort()
+	@named OutPresPort = PressurePort()
+	@named OutTempPort = TemperaturePort()
+	@named OutPowPort = PowerPort()
+	@named OutMdotPort = MassFlowPort()
+    @named TOTSensor = TemperatureSensor()
+    @named shaftin = Shaft()
+
+    para = @parameters begin
+        m_cas_turb = 122.2,  [description="Turbine casing mass (kg)"]
+        c_casing = 500,       [description="Specific Heat Casing Turbine (J/kg·K)"]
+        κg = cp(InTempPort.T) / cv(InTempPort.T)
+        γ_g = (κg - 1) / κg
+    end
+
+    vars = @variables begin
+        T4(t),       [description="Turbine Outlet Temperature (K)"]
+        Nred_t(t),   [description="Reduced speed turbine"]
+        ṁ_turb(t),   [description="Turbine mass flow from map"]
+        eff_t(t),    [description="Turbine efficiency from map"]
+    end
+
+    eqs = [ 
+        Nred_t ~ (60/(2π)) * (shaftin.ω / sqrt(InTempPort.T)),
+        ṁ_turb ~ turbine_m(Nred_t, π_t),
+        eff_t ~ turbine_η(Nred_t, π_t),
+        OutMdotPort.mdot ~ ṁ_turb * ((InPresPortFromCC.p + InPresPortFromRec.p)/sqrt(InTempPort.T)),
+        OutPresPort.p ~ (InPresPortFromCC.p + InPresPortFromRec.p) / π_t,
+        OutTempPort.T ~ InTempPort.T * (1 - eff_t*(1 - π_t^(-γ_g))),
+        D(T4) ~ (1 / (m_cas_turb*c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T4)),
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h((InPresPortFromCC.p + InPresPortFromRec.p), InTempPort.T) - h(OutPresPort.p, OutTempPort.T)),
+        TOTSensor.T ~ T4]
     
+    compose(ODESystem(eqs, t, vars, para; name), InPresPortFromCC, InPresPortFromRec, InTempPort, OutPresPort,OutTempPort,OutPowPort,OutMdotPort,shaftin, TOTSensor)
+end
+
+# ╔═╡ 081c69ab-5e79-4cbd-96d8-dbbe2f092388
+function Recuperator(; name, A_total = 10000.0, N = 3)
+	@named InPresPort_hot = PressurePort()
+	@named InTempPort_hot = TemperaturePort()
+	@named InMdotPort_hot = MassFlowPort()
+	@named OutPresPort_hot = PressurePort()
+	@named OutTempPort_hot = TemperaturePort()
+	@named OutMdotPort_hot = MassFlowPort()
+    @named InPresPort_cold = PressurePort()
+	@named InTempPort_cold = TemperaturePort()
+	@named InMdotPort_cold = MassFlowPort()
+	@named OutPresPort_cold = PressurePort()
+	@named OutTempPort_cold = TemperaturePort()
+	@named OutMdotPort_cold = MassFlowPort()
+
     # Parameter sistem didefinisikan sebagai NamedTuple (nilai numerik)
     para = (
-        N = 3,
-        cp_h = 1000.0,
-        cp_c = 1000.0,
-        m_dot_h = 0.65,
-        m_dot_c = 0.65,
+        cp_h = 500.0,
+        cp_c = 500.0,
+        m_dot_h = 0.508694,
+        m_dot_c = 0.5,
         h_h = 100.0,
         h_c = 100.0,
-        A_total = 10.0,
         m_w = 185.0,
         c_w = 500.0,
         σ_h = 0.98,
         σ_c = 0.95,
-        T_h_in = 950.0,
-        T_c_in = 600.0,
-        P_hin = 300000.0,
-        P_cin = 200000.0,
-        A = 10.0 / 3
+        A = A_total / N
     )
 
     @independent_variables t
@@ -185,31 +705,29 @@ function Recuperator(; name)
     
     for i in 1:3
         # Definisikan suhu masuk fluida
-        T_h_in_i = (i == 1) ? inport_hot.T : T_h_out[i-1]
-        T_c_in_i = (i == 3) ? inport_cold.T : T_c_out[i+1]
+        T_h_in_i = (i == 1) ? InTempPort_hot.T : T_h_out[i-1]
+        T_c_in_i = (i == 3) ? InTempPort_cold.T : T_c_out[i+1]
         
         # Persamaan untuk fluida panas
-        push!(eqs, T_h_out[i] ~ (para.m_dot_h * para.cp_h * T_h_in_i - 0.5 * para.h_h * para.A * T_h_in_i + para.h_h * para.A * T_w[i]) /
-                                (para.m_dot_h * para.cp_h + 0.5 * para.h_h * para.A))
+        push!(eqs, T_h_out[i] ~ ((para.m_dot_h * para.cp_h * T_h_in_i - 0.5 * para.h_h * para.A) * T_h_in_i + para.h_h * para.A * T_w[i]) /
+                                ((para.m_dot_h * para.cp_h * T_h_in_i) + (0.5 * para.h_h * para.A)))
         # Persamaan untuk fluida dingin
-        push!(eqs, T_c_out[i] ~ (para.m_dot_c * para.cp_c * T_c_in_i - 0.5 * para.h_c * para.A * T_c_in_i + para.h_c * para.A * T_w[i]) /
-                                (para.m_dot_c * para.cp_c + 0.5 * para.h_c * para.A))
+        push!(eqs, T_c_out[i] ~ ((para.m_dot_c * para.cp_c * T_c_in_i - 0.5 * para.h_c * para.A) * T_c_in_i + para.h_c * para.A * T_w[i]) /
+                                ((para.m_dot_c * para.cp_c * T_c_in_i) + (0.5 * para.h_c * para.A)))
         
         # Persamaan diferensial untuk perubahan suhu dinding
-        Q_h = para.m_dot_h * para.cp_h * (T_h_in_i - T_h_out[i])
-        Q_c = para.m_dot_c * para.cp_c * (T_c_out[i] - T_c_in_i)
-        push!(eqs, Differential(t)(T_w[i]) ~ (Q_h - Q_c) / (para.m_w * para.c_w))
+		Q_h = para.m_dot_h * (h(InPresPort_hot.p, T_h_in_i) - h(InPresPort_hot.p, T_h_out[i]))
+		Q_c = para.m_dot_c * (h(InPresPort_cold.p, T_c_out[i]) - h(InPresPort_cold.p, T_c_in_i))
+        push!(eqs, Differential(t)(T_w[i]) ~ (Q_h - Q_c) / ((para.m_w / N) * para.c_w))
     end
     
     # Kondisi batas port
-    push!(eqs, outport_hot.T ~ T_h_out[3])
-    push!(eqs, outport_cold.T ~ T_c_out[1])
-    push!(eqs, outport_hot.p ~ inport_hot.p * para.σ_h)
-    push!(eqs, outport_cold.p ~ inport_cold.p * para.σ_c)
-    push!(eqs, outport_hot.mdot ~ -para.m_dot_h)
-    push!(eqs, outport_cold.mdot ~ -para.m_dot_c)
-    push!(eqs, outport_hot.P ~ 0)
-    push!(eqs, outport_cold.P ~ 0)
+    push!(eqs, OutTempPort_hot.T ~ T_h_out[3])
+    push!(eqs, OutTempPort_cold.T ~ T_c_out[1])
+    push!(eqs, OutPresPort_hot.p ~ InPresPort_hot.p * para.σ_h)
+    push!(eqs, OutPresPort_cold.p ~ InPresPort_cold.p * para.σ_c)
+    push!(eqs, OutMdotPort_hot.mdot ~ -para.m_dot_h)
+    push!(eqs, OutMdotPort_cold.mdot ~ -para.m_dot_c)
     
     # Gabungkan semua variabel keadaan ke dalam satu vektor
     flat_vars = vcat(T_w..., T_h_out..., T_c_out...)
@@ -218,7 +736,7 @@ function Recuperator(; name)
     sys = ODESystem(eqs, t, flat_vars, []; name=name)
     
     # Komposisi sistem dengan semua port dalam satu vektor
-    ports = [inport_hot, inport_cold, outport_hot, outport_cold]
+    ports = [InPresPort_hot, InTempPort_hot, InMdotPort_hot, OutPresPort_hot, OutTempPort_hot, OutMdotPort_hot, InPresPort_cold, InTempPort_cold, InMdotPort_cold, OutPresPort_cold, OutTempPort_cold, OutMdotPort_cold]
     comp_sys = compose(sys, ports)
     
     return comp_sys
@@ -226,8 +744,14 @@ end
 
 # ╔═╡ fb2f0ba9-b5be-4da5-87cc-a5ed45f6a6ee
 function CombustionChamber(;name)
-    @named inport = Port()
-    @named outport = Port()
+	@named InPresPort = PressurePort()
+	@named InTempPort = TemperaturePort()
+	@named InMdotPortFromCompressor = MassFlowPort()
+	@named InMdotPortFromTurbine = MassFlowPort()
+	@named OutPresPort = PressurePort()
+	@named OutPresPort2 = PressurePort()
+	@named OutTempPort = TemperaturePort()
+	@named ṁ_fuel = RealInput()
 
     pars = @parameters begin
         η_comb = 0.97,        [description = "Combustor efficiency"]
@@ -239,9 +763,7 @@ function CombustionChamber(;name)
         Tf = 303.15,          [description = "Fuel Temperature (K)"]
         pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
         ρf = 0.8217,          [description = "Fuel Density (kg/m^3)"]
-		ṁ_comp = 0.4 
-		ṁ_turb = 0.409
-		ṁ_fuel = 0.009
+		ṁ_fuel(t) = 0.00701
     end
 
     vars = @variables begin
@@ -251,27 +773,25 @@ function CombustionChamber(;name)
     end
 
     # Define equations (steady-state: time derivatives are zero)
-    eqs = [ D(ρ3) ~ (ṁ_comp + ṁ_fuel - ṁ_turb) / V_comb,
-			D(T3) ~ (1 / (ρ3 * V_comb*cv(outport.T))) * (ṁ_comp * h(inport.p, inport.T) + ṁ_fuel * hf(pf, Tf) + (η_comb * ṁ_fuel * LHV) - ṁ_turb * h(outport.p, outport.T) - (cv(T3)*T3)*(ṁ_comp + ṁ_fuel - ṁ_turb)),
-			D(TIT) ~ (ṁ_turb * (h(outport.p, outport.T) - h(outport.p, TIT))) / (m_cas_comb * c_casing),
-        	outport.p ~ ρ3 * R_air() * outport.T,
-        	outport.mdot ~ inport.mdot,
-        	outport.P ~ inport.P,
-			outport.T ~ T3]
+    eqs = [ D(ρ3) ~ ((InMdotPortFromCompressor.mdot + ṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb,
+			D(T3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + ṁ_fuel * hf(pf, Tf) + (η_comb * ṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(OutPresPort2.p, OutTempPort.T) - (cv(T3)*T3)*(InMdotPortFromCompressor.mdot + ṁ_fuel - InMdotPortFromTurbine.mdot)),
+			D(TIT) ~ (InMdotPortFromTurbine.mdot * (h(OutPresPort2.p, OutTempPort.T) - h(OutPresPort2.p, TIT))) / (m_cas_comb * c_casing),
+        	OutPresPort2.p ~ ρ3 * R_air() * OutTempPort.T,
+			OutPresPort.p ~ OutPresPort2.p * σ_comb,
+			OutTempPort.T ~ T3]
 	
-    compose(ODESystem(eqs, t, name=name), inport, outport)
+    compose(ODESystem(eqs, t, name=name), InPresPort, InTempPort,  InMdotPortFromCompressor, InMdotPortFromTurbine, OutPresPort, OutPresPort2, OutTempPort)
 end
 
 # ╔═╡ 36c79577-fba0-4c17-afec-12c5ddd939dd
-function Turbine(;name)
+function Turbine(;name, ṁ_t = 0.508694, η_turb_is = 0.95, π_t = 3.4)
 	@named inport = Port()
     @named outport = Port()
+	@named TOTSensor = TemperatureSensor()
+	
 	para = @parameters begin
-		m_cas_turb = 105, 		[description = "Turbine casing mass (kg)"]
-        c_casing = 600, 		[description = "Specific Heat Casing Turbine (J/kg·K)"]
-        ṁ_t = 0.46,     		[description = "Mass Flow Turbine (kg/s)"]
-        η_turb_is = 0.95, 		[description = "Turbine Isentropic Efficiency"]
-        π_t = 2.0, 				[description = "Turbine Pressure Ratio"]
+		m_cas_turb = 122.2, 		[description = "Turbine casing mass (kg)"]
+        c_casing = 500, 		[description = "Specific Heat Casing Turbine (J/kg·K)"]
 		κg = cp(inport.T)/cv(inport.T)
 		γ_g = (κg - 1) / κg
 	end
@@ -281,100 +801,38 @@ function Turbine(;name)
 	end
 	
 	eqs = [ D(T4) ~ (1 / (m_cas_turb * c_casing)) * (ṁ_t * (h(outport.p, outport.T) 		- h(outport.p, T4)))
-			outport.p ~ π_t * inport.p
+			outport.p ~ inport.p / π_t 
 			outport.T ~ inport.T * (1 - η_turb_is * (1 - π_t^(-γ_g)))
             outport.mdot ~ inport.mdot
-			outport.P ~ inport.P + (ṁ_t * (h(inport.p, inport.T) - h(outport.p, outport.T)))]	
+			outport.P ~ inport.P + (ṁ_t * (h(inport.p, inport.T) - h(outport.p, outport.T)))
+			TOTSensor.T ~ T4]	
+
    compose(ODESystem(eqs, t, vars, para;name), inport, outport)
 end
 
 # ╔═╡ c34dbbdb-bd7b-4cea-a4ef-dc83fb813a12
-function RotationalSystem(;name, Pload = 70)
-	@named inport = Port()
-    @named outport = Port()
+function RotationalSystem(;name)
+	@named InPowPortFromComp = PowerPort()
+	@named InPowPortFromTurb = PowerPort()
+	@named OutPowPort = PowerPort()
+    @named outshaft = Shaft()
+	@named Pload = RealInput()
+	
 	para = @parameters begin
         I =  8.3e-3, 			[description = "Inertia (kg.m^2)"]
-        P_lb = 1500, 			[description = "Power Bearing Losses (W)"]
-        P_le = 10000, 			[description = "Power Electrical Losses (W)"]
+		Pload(t) = 70000
+        P_lb = 21.33e-3 * (outshaft.ω * (60/(2*pi))),			[description = "Power Bearing Losses (W)"]
+        P_le = -5.0802e-3 * (Pload/1000)^3 + 2.3891 * (Pload/1000)^2 − 2.3492e2 * (Pload/1000) + 8.3781e3            , 			[description = "Power Electrical Losses (W)"]
 	end
 	
 	vars = @variables begin
 		ω(t)
 	end
 	
-	eqs = [ D(ω) ~ (1 / I) * (outport.P)
-			outport.p ~ inport.p
-			outport.T ~ inport.T
-            outport.mdot ~ inport.mdot
-			outport.P ~ inport.P - Pload - P_lb - P_le]	
-   compose(ODESystem(eqs, t, vars, para;name), inport, outport)
-end
-
-# ╔═╡ e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
-function Sink(;name) 
-    @named    port = Port()
-    para = @parameters begin
-        
-    end
-    vars = @variables begin
-        p(t)
-		T(t)
-        mdot(t) 
-		P(t)
-     end
-
-   eqs = [
-        mdot ~ port.mdot
-        p ~ port.p
-		T ~ port.T
-	    P ~ port.P
-   ]
-   compose(ODESystem(eqs, t, vars, para;name),port)
-end
-
-# ╔═╡ 66472cd8-2236-4783-adf5-05fcef934bda
-function TOTController(; name = :TOTController, Tref = 800.0, Kp = 1.0, Ki = 0.01)
-    @parameters t
-    @variables begin
-        T_meas(t)   # measured TOT from the plant
-        m_fuel(t)   # commanded fuel flow
-        e_tot(t)    # error signal
-        x_int(t)    # integrator state
-    end
-    @derivatives D'~t
-
-    eqs = [
-        # TOT error
-        e_tot ~ T_meas - Tref,
-
-        # integrator
-        D(x_int) ~ e_tot,
-
-        # simple PI control law
-        m_fuel ~ Kp*e_tot + Ki*x_int
-    ]
-
-    ODESystem(eqs, t, [T_meas, m_fuel, e_tot, x_int], []; name=name)
-end
-
-# ╔═╡ 49479608-7079-48ef-ae8a-de5fcea796b3
-function SpeedController(; name=:SpeedController, ω_ref = 500.0, Kp=2.0, Ki=0.05)
-    @parameters t
-    @variables begin
-        ω_meas(t)
-        Pload(t)
-        e_ω(t)
-        x_intω(t)
-    end
-    @derivatives D'~t
-
-    eqs = [
-        e_ω ~ ω_meas - ω_ref,
-        D(x_intω) ~ e_ω,
-        Pload ~ Kp*e_ω + Ki*x_intω
-    ]
-
-    ODESystem(eqs, t, [ω_meas, Pload, e_ω, x_intω], []; name=name)
+	eqs = [ D(ω) ~ (1 / (I * ω)) * (OutPowPort.P/1000)
+			OutPowPort.P ~ (InPowPortFromTurb.P-InPowPortFromComp.P) - Pload - P_lb - P_le
+			outshaft.ω ~ ω]	
+   compose(ODESystem(eqs, t, vars, para;name), InPowPortFromComp, InPowPortFromTurb, OutPowPort, outshaft)
 end
 
 # ╔═╡ 49a77da0-f257-4cb8-aa73-1849a21f97be
@@ -383,14 +841,11 @@ start_T = 300
 # ╔═╡ 8fc05447-78c4-40fa-9989-1a7db8e5d2da
 start_p = 101325
 
-# ╔═╡ 66a9a4bd-c12d-4d56-943a-71a0f3953f99
-mdot = 0
+# ╔═╡ bf27a03b-d419-41d0-bccf-5b50a556b2ae
+@named sourcetemp = SourceTemperature(source_temperature = start_T)
 
-# ╔═╡ ae617230-15eb-4622-a39a-3da3215b0046
-start_P = 0
-
-# ╔═╡ 61f1b664-8781-4a66-928d-59a5dd78dcb1
-@named source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
+# ╔═╡ 8eec0d23-6036-4b4d-98bc-d384cffb37c1
+@named sourcepres = SourcePressure(source_pressure = start_p)
 
 # ╔═╡ ae90d075-dc5e-47d9-ab22-c7b7307937f9
 @named compressor = Compressor()
@@ -404,67 +859,202 @@ start_P = 0
 # ╔═╡ 15b188e0-4c3a-48f7-a3e4-4f615b1f0afe
 @named turbine = Turbine()
 
+# ╔═╡ 0fa65b73-b35f-4f39-990a-3f837ddfede2
+@named shaft = RotationalSystem()
+
 # ╔═╡ d90569cf-764a-468b-b3a1-7536fef43f59
-@named sink = Sink()
+@named wasteheat = WasteHeat()
+
+# ╔═╡ 7428ccb3-ea6f-4a04-ae41-7012aba02431
+@named CWM = CompressorWithMap()
+
+# ╔═╡ 0fda9b53-a3ec-4deb-bf3f-d57686c41346
+@named TWM = TurbineWithMap()
+
+# ╔═╡ cca5c862-f17d-4b2f-b40f-4ea62d908825
+function MicroGasTurbineFIX(;name = :MicroGasTurbineFIX)
+	@named sourceT = SourceTemperature(source_temperature = start_T)
+	@named sourcep = SourcePressure(source_pressure = start_p)
+	@named compressor = CompressorWithMap()
+	@named turbine = TurbineWithMap()
+	@named recuperator = Recuperator()
+	@named combustionchamber = CombustionChamber()
+	@named shaft = RotationalSystem()
+	@named wasteheat = WasteHeat()
+	
+	eqs = [ # To Compressor
+			connect(sourceT.TempPort,compressor.InTempPort)
+			connect(sourcep.PresPort,compressor.InPresPort)
+			connect(recuperator.OutPresPort_cold,compressor.InPresPortFromRec)
+			connect(shaft.outshaft, compressor.shaftin)
+
+			#To Recuperator
+			connect(compressor.OutTempPort,recuperator.InTempPort_cold)
+			connect(compressor.OutMdotPort,recuperator.InMdotPort_cold)
+			connect(sourcep.PresPort,recuperator.InPresPort_hot)
+			connect(turbine.OutMdotPort,recuperator.InMdotPort_hot)
+			connect(turbine.OutTempPort,recuperator.InTempPort_hot)
+			connect(combustionchamber.OutPresPort2,recuperator.InPresPort_cold)
+
+			#To Combustion Chamber
+			connect(compressor.OutPresPort, combustionchamber.InPresPort)
+			connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+			connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+			connect(recuperator.OutTempPort_cold,combustionchamber.InTempPort)
+
+			#To Turbine
+			connect(combustionchamber.OutTempPort,turbine.InTempPort)
+			connect(combustionchamber.OutPresPort,turbine.InPresPortFromCC)
+			connect(recuperator.OutPresPort_hot,turbine.InPresPortFromRec)
+			connect(shaft.outshaft, turbine.shaftin) 
+			
+			#To Shaft
+			connect(compressor.OutPowPort,shaft.InPowPortFromComp)
+			connect(turbine.OutPowPort,shaft.InPowPortFromTurb)
+			
+			#Heat Waste
+			connect(recuperator.OutTempPort_hot, wasteheat.TempPort)]
+		
+   	return compose(ODESystem(eqs, t, systems = [sourceT, sourcep, compressor,combustionchamber,recuperator,turbine, shaft, wasteheat], name = name))
+	
+end
+
+# ╔═╡ 34cf9e0c-ea39-4d38-9ec8-b4c38a486cad
+@named mgt = MicroGasTurbineFIX()
+
+# ╔═╡ 0aa86481-1c87-4729-9823-778ce8b062b5
+ssys = structural_simplify(mgt)
+
+# ╔═╡ 35eb6e17-4cea-45de-b2c5-846983793601
+u0 = [compressor.T2 => 300, combustionchamber.ρ3 => 15,combustionchamber.T3 => 300, combustionchamber.TIT => 300, recuperator.T_w[1] => 157, recuperator.T_w[2] => 403.5, recuperator.T_w[3] => 650, turbine.T4 => 300, shaft.ω => 5850]
+
+# ╔═╡ 2e1ce1ef-24f4-4581-b6dc-b98df795f5d3
+tspan = (0.0, 1000.0)
+
+# ╔═╡ a4876ad9-b931-4eb8-beeb-a5132489d87d
+prob = ODEProblem(ssys, u0, tspan)
+
+# ╔═╡ 1a0ef76a-a734-4150-8740-6beac6264806
+sol = solve(prob, saveat = 1.0)
+
+# ╔═╡ e116de95-6f54-43a2-bfd8-d2db7433ea70
+plot(sol, layout = 9)
+
+# ╔═╡ 89ca6c60-6dd3-4652-83c9-d81892a5f065
+println("Combustor Inlet Pressure: ",sol[combustionchamber.InPresPort.p][end], " Pa")
+
+# ╔═╡ 1466e67a-39ec-4997-8193-2948822bf404
+println("Temperature (C): ", sol[turbine.T4][end] - 273)
+
+# ╔═╡ 48bff90f-da0e-4d1a-a28c-5c61fa073cf9
+println("Power (kW): ", sol[shaft.OutPowPort.P][end] / 1000)
+
+# ╔═╡ e46ce2f8-398d-4171-9076-bc8d5bc0e121
+println("Shaft Rotation Speed (RPM): ", sol[shaft.outshaft.ω][end] * (60/(2*pi)))
+
+# ╔═╡ 60563d50-d507-45b7-930d-3b3ff715eebc
+function MicroGasTurbineFTCM(;name = :MicroGasTurbine)
+	@named source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
+	@named compressor = CompressorWithMap()
+	@named recuperator = Recuperator()
+	@named combustionchamber = CombustionChamber()
+	@named turbine = TurbineWithMap()
+	@named shaft = RotationalSystem()
+	@named sink = Sink()
+	
+	eqs = [ connect(source.port,compressor.inport)
+			connect(compressor.outport, recuperator.inport_cold)
+			connect(recuperator.outport_cold, combustionchamber.inport)
+			connect(combustionchamber.outport, turbine.inport)
+			connect(turbine.outport, shaft.inport)
+			connect(turbine.outport, recuperator.inport_hot)
+			connect(recuperator.outport_hot, sink.port)
+	
+			connect(shaft.outshaft, compressor.shaftin)
+			connect(shaft.outshaft, turbine.shaftin) ]
+		
+   	return compose(ODESystem(eqs, t, systems = [source,compressor,combustionchamber,recuperator,turbine, shaft, sink], name = name))
+	
+end
 
 # ╔═╡ cac61228-aded-45ac-908f-19958d9dbba3
-eqs = [
-    connect(source.port,compressor.inport)
-	connect(compressor.outport, recuperator.inport_cold)
-	connect(recuperator.outport_cold, combustionchamber.inport)
-	connect(combustionchamber.outport, turbine.inport)
-	connect(turbine.outport, recuperator.inport_hot)
-	connect(recuperator.outport_hot, sink.port)]
+function MicroGasTurbineNoCompressorMap(;name = :MicroGasTurbineNoCompressorMap)
+	@named source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
+	@named compressor = Compressor()
+	@named recuperator = Recuperator()
+	@named combustionchamber = CombustionChamber()
+	@named turbine = Turbine()
+	@named shaft = RotationalSystem()
+	@named sink = Sink()
+	
+	eqs = [ connect(source.port,compressor.inport)
+			connect(compressor.outport, recuperator.inport_cold)
+			connect(recuperator.outport_cold, combustionchamber.inport)
+			connect(combustionchamber.outport, turbine.inport)
+			connect(turbine.outport, shaft.inport)
+			connect(turbine.outport, recuperator.inport_hot)
+			connect(recuperator.outport_hot, sink.port)]			
+		
+   	return compose(ODESystem(eqs, t, systems = [source,compressor,combustionchamber,recuperator,turbine, shaft, sink], name = name))
+	
+end
 
-# ╔═╡ 85f6e6a6-006c-4c66-93e7-14446363ff82
-@named model = ODESystem(eqs, t, systems=[source,compressor,combustionchamber,recuperator,turbine,sink])
+# ╔═╡ cadc066d-a336-413c-8d8e-3eda5dc95a3b
+@mtkmodel MicroGasTurbineWithController begin
+	@components begin
+		ref = Constant(k=923)
+		pi_controller = Blocks.LimPI(k = 1.1, T = 0.035, u_max = 10, Ta = 0.035)
+		feedback = Blocks.Feedback()
+		source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
+		compressor = Compressor()
+		recuperator = Recuperator()
+		combustionchamber = CombustionChamber()
+		turbine = Turbine()
+		shaft = RotationalSystem()
+		sink = Sink()
+		temperature_sensor = TemperatureSensor()
+		speed_sensor = SpeedSensor()
+	end
+	
+	@equations begin
+		#MGT Connections
+		connect(source.port,compressor.inport)
+		connect(compressor.outport, recuperator.inport_cold)
+		connect(recuperator.outport_cold, combustionchamber.inport)
+		connect(combustionchamber.outport, turbine.inport)
+		connect(turbine.outport, shaft.inport)
+		connect(turbine.outport, recuperator.inport_hot)
+		connect(recuperator.outport_hot, sink.port)
 
-# ╔═╡ 8c3f2b8d-17c2-4cbc-be06-ee01f9ea2ad0
-u0 = [compressor.T2 => 300, combustionchamber.ρ3 => 20,combustionchamber.T3 => 300, combustionchamber.TIT => 300, recuperator.T_w[1] => 300, recuperator.T_w[2] => 300, recuperator.T_w[3] => 300, turbine.T4 => 300]
-
-# ╔═╡ 8ab24f9c-17b7-405a-8d4f-fa300824357f
-tspan = (0.0, 100.0)
-
-# ╔═╡ 01aed850-6de0-4561-b6c0-5289338e2c23
-sys = structural_simplify(model)
-
-# ╔═╡ c487b842-9958-4015-9823-e6e92cc84ace
-prob = ODEProblem(sys,u0,tspan)
-
-# ╔═╡ 3d032982-a274-4fcf-b4a7-1ef4fb8ffe3f
-sol = solve(prob,saveat = 1.0)
-
-# ╔═╡ f0bb568a-fd95-4820-b596-fea9889e566d
-println("Final Results :")
-
-# ╔═╡ f1eae636-f631-436a-88c9-e3a7063ffd04
-println("End Pressure (Pa): ", sol[sink.port.p][end])
-
-# ╔═╡ f5b21d58-30b9-4dd6-9e0b-4f048d8931f9
-println("End Temperature (K): ", sol[turbine.outport.T][end])
-
-# ╔═╡ 2a56d75b-e30e-45f8-a1f9-c3698c47d751
-println("End Power (W): ", sol[turbine.outport.P][end])
-
-# ╔═╡ b288f644-490e-4393-8082-3e1983244983
-println("Mass Flow Rate (kg/s): ", sol[sink.port.mdot][end])
-
-# ╔═╡ 57c56a6a-29c3-4a66-ae1b-07ca107e7d14
-plot(sol)
+		#Control System
+		connect(ref.output, feedback.input1)
+		connect(turbine.TOTSensor, feedback.input2)
+		connect(feedback.output, pi_controller.err_input)
+		pi_controller.ctr_output ~ combustionchamber.ṁ_fuel
+	end
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
+ControlSystems = "a6e380b2-a6ca-5380-bf3e-84a91bcd477e"
 CoolProp = "e084ae63-2819-5025-826e-f8e611a84251"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+ModelingToolkitStandardLibrary = "16a59e39-deab-5bd0-87e4-056b12336739"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 
 [compat]
+ControlSystems = "~1.11.1"
 CoolProp = "~0.2.0"
 DifferentialEquations = "~7.15.0"
+MacroTools = "~0.5.13"
 ModelingToolkit = "~9.49.0"
+ModelingToolkitStandardLibrary = "~2.19.0"
 Plots = "~1.40.9"
+PlutoUI = "~0.7.23"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -473,7 +1063,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.1"
 manifest_format = "2.0"
-project_hash = "8d5cc3fd6456b0487185675ee116a1824b1abc0e"
+project_hash = "03d6316f14d6f96d70d56e8b083a9b33c246687b"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "72af59f5b8f09faee36b4ec48e014a79210f2f4f"
@@ -485,6 +1075,23 @@ weakdeps = ["ChainRulesCore", "ConstructionBase", "EnzymeCore"]
     ADTypesChainRulesCoreExt = "ChainRulesCore"
     ADTypesConstructionBaseExt = "ConstructionBase"
     ADTypesEnzymeCoreExt = "EnzymeCore"
+
+[[deps.AbstractFFTs]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "d92ad398961a3ed262d8bf04a1a2b8340f915fef"
+uuid = "621f4979-c628-5d54-868e-fcf4e3e8185c"
+version = "1.5.0"
+weakdeps = ["ChainRulesCore", "Test"]
+
+    [deps.AbstractFFTs.extensions]
+    AbstractFFTsChainRulesCoreExt = "ChainRulesCore"
+    AbstractFFTsTestExt = "Test"
+
+[[deps.AbstractPlutoDingetjes]]
+deps = ["Pkg"]
+git-tree-sha1 = "6e1d2a35f2f90a4bc7c2ed98079b2ba09c35b83a"
+uuid = "6e696c72-6542-2067-7265-42206c756150"
+version = "1.3.2"
 
 [[deps.AbstractTrees]]
 git-tree-sha1 = "2d9c9a55f9c93e8887ad391fbae72f8ef55e1177"
@@ -601,6 +1208,11 @@ weakdeps = ["SparseArrays"]
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
+
+[[deps.Bessels]]
+git-tree-sha1 = "4435559dc39793d53a9e3d278e185e920b4619ef"
+uuid = "0e736298-9ec6-45e8-9647-e4fc86a2fe38"
+version = "0.2.8"
 
 [[deps.Bijections]]
 git-tree-sha1 = "d8b0439d2be438a5f2cd68ec158fe08a7b2595b7"
@@ -830,6 +1442,25 @@ git-tree-sha1 = "439e35b0b36e2e5881738abc8857bd92ad6ff9a8"
 uuid = "d38c429a-6771-53c6-b99e-75d170b6e991"
 version = "0.6.3"
 
+[[deps.ControlSystems]]
+deps = ["ControlSystemsBase", "DelayDiffEq", "DiffEqCallbacks", "ForwardDiff", "Hungarian", "LinearAlgebra", "OrdinaryDiffEq", "Printf", "Random", "RecipesBase", "Reexport", "SparseArrays", "StaticArrays"]
+git-tree-sha1 = "63137ac31f3487da7b262a9686853ceeb9fbf3b7"
+uuid = "a6e380b2-a6ca-5380-bf3e-84a91bcd477e"
+version = "1.11.1"
+
+[[deps.ControlSystemsBase]]
+deps = ["DSP", "ForwardDiff", "IterTools", "LaTeXStrings", "LinearAlgebra", "MacroTools", "MatrixEquations", "MatrixPencils", "Polynomials", "PrecompileTools", "Printf", "Random", "RecipesBase", "SparseArrays", "StaticArraysCore", "UUIDs"]
+git-tree-sha1 = "373ea7771fd37103250cd0ed418d4fc8d351c710"
+uuid = "aaaaaaaa-a6ca-5380-bf3e-84a91bcd477e"
+version = "1.13.2"
+
+    [deps.ControlSystemsBase.extensions]
+    ControlSystemsBaseImplicitDifferentiationExt = ["ImplicitDifferentiation", "ComponentArrays"]
+
+    [deps.ControlSystemsBase.weakdeps]
+    ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
+    ImplicitDifferentiation = "57b37032-215b-411a-8a7c-41a003a55207"
+
 [[deps.CoolProp]]
 deps = ["CoolProp_jll", "Markdown", "Unitful"]
 git-tree-sha1 = "e17766ab84c180ffde975e1128109fa389fdf22c"
@@ -852,6 +1483,16 @@ version = "0.3.1"
 git-tree-sha1 = "249fe38abf76d48563e2f4556bebd215aa317e15"
 uuid = "a8cc5b0e-0ffa-5ad4-8c14-923d3ee1735f"
 version = "4.1.1"
+
+[[deps.DSP]]
+deps = ["Bessels", "FFTW", "IterTools", "LinearAlgebra", "Polynomials", "Random", "Reexport", "SpecialFunctions", "Statistics"]
+git-tree-sha1 = "489db9d78b53e44fb753d225c58832632d74ab10"
+uuid = "717857b8-e6f2-59f4-9121-6e50c889abd2"
+version = "0.8.0"
+weakdeps = ["OffsetArrays"]
+
+    [deps.DSP.extensions]
+    OffsetArraysExt = "OffsetArrays"
 
 [[deps.DataAPI]]
 git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
@@ -1161,6 +1802,18 @@ git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
 version = "4.4.4+1"
 
+[[deps.FFTW]]
+deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
+git-tree-sha1 = "4820348781ae578893311153d69049a93d05f39d"
+uuid = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+version = "1.8.0"
+
+[[deps.FFTW_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "4d81ed14783ec49ce9f2e168208a12ce1815aa25"
+uuid = "f5851436-0d7a-5f13-b9de-f02708fd171a"
+version = "3.3.10+3"
+
 [[deps.FastAlmostBandedMatrices]]
 deps = ["ArrayInterface", "ArrayLayouts", "BandedMatrices", "ConcreteStructs", "LazyArrays", "LinearAlgebra", "MatrixFactorizations", "PrecompileTools", "Reexport"]
 git-tree-sha1 = "3f03d94c71126b6cfe20d3cbcc41c5cd27e1c419"
@@ -1387,11 +2040,35 @@ git-tree-sha1 = "8e070b599339d622e9a081d17230d74a5c473293"
 uuid = "3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"
 version = "0.1.17"
 
+[[deps.Hungarian]]
+deps = ["LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "4f84db415ccb0ea750b10738bfecdd55388fd1b6"
+uuid = "e91730f6-4275-51fb-a7a0-7064cfbd3b39"
+version = "0.7.0"
+
 [[deps.HypergeometricFunctions]]
 deps = ["LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
 git-tree-sha1 = "b1c2585431c382e3fe5805874bda6aea90a95de9"
 uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
 version = "0.3.25"
+
+[[deps.Hyperscript]]
+deps = ["Test"]
+git-tree-sha1 = "8d511d5b81240fc8e6802386302675bdf47737b9"
+uuid = "47d2ed2b-36de-50cf-bf87-49c2cf4b8b91"
+version = "0.0.4"
+
+[[deps.HypertextLiteral]]
+deps = ["Tricks"]
+git-tree-sha1 = "7134810b1afce04bbc1045ca1985fbe81ce17653"
+uuid = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
+version = "0.9.5"
+
+[[deps.IOCapture]]
+deps = ["Logging", "Random"]
+git-tree-sha1 = "b6d6bfdd7ce25b0f9b2f6b3dd56b2673a66c8770"
+uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
+version = "0.2.5"
 
 [[deps.IfElse]]
 git-tree-sha1 = "debdd00ffef04665ccbb3e150747a77560e8fad1"
@@ -1444,6 +2121,11 @@ weakdeps = ["Dates", "Test"]
 git-tree-sha1 = "630b497eafcc20001bba38a4651b327dcfc491d2"
 uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
 version = "0.2.2"
+
+[[deps.IterTools]]
+git-tree-sha1 = "42d5f897009e7ff2cf88db414a389e5ed1bdd023"
+uuid = "c8e1da08-722c-5040-9ed9-7db0dc04731e"
+version = "1.10.0"
 
 [[deps.IteratorInterfaceExtensions]]
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
@@ -1677,6 +2359,18 @@ deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 version = "1.11.0"
 
+[[deps.LinearMaps]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "ee79c3208e55786de58f8dcccca098ced79f743f"
+uuid = "7a12625a-238d-50fd-b39a-03d52299707e"
+version = "3.11.3"
+weakdeps = ["ChainRulesCore", "SparseArrays", "Statistics"]
+
+    [deps.LinearMaps.extensions]
+    LinearMapsChainRulesCoreExt = "ChainRulesCore"
+    LinearMapsSparseArraysExt = "SparseArrays"
+    LinearMapsStatisticsExt = "Statistics"
+
 [[deps.LinearSolve]]
 deps = ["ArrayInterface", "ChainRulesCore", "ConcreteStructs", "DocStringExtensions", "EnumX", "FastLapackInterface", "GPUArraysCore", "InteractiveUtils", "KLU", "Krylov", "LazyArrays", "Libdl", "LinearAlgebra", "MKL_jll", "Markdown", "PrecompileTools", "Preferences", "RecursiveFactorization", "Reexport", "SciMLBase", "SciMLOperators", "Setfield", "SparseArrays", "Sparspak", "StaticArraysCore", "UnPack"]
 git-tree-sha1 = "9d5872d134bd33dd3e120767004f760770958863"
@@ -1777,6 +2471,12 @@ deps = ["Base64"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
 
+[[deps.MatrixEquations]]
+deps = ["LinearAlgebra", "LinearMaps"]
+git-tree-sha1 = "f765b4eda3ea9be8e644b9127809ca5151f3d9ea"
+uuid = "99c1a7ee-ab34-5fd5-8076-27c950a045f4"
+version = "2.4.2"
+
 [[deps.MatrixFactorizations]]
 deps = ["ArrayLayouts", "LinearAlgebra", "Printf", "Random"]
 git-tree-sha1 = "16a726dba99685d9e94c8d0a8f655383121fc608"
@@ -1786,6 +2486,12 @@ weakdeps = ["BandedMatrices"]
 
     [deps.MatrixFactorizations.extensions]
     MatrixFactorizationsBandedMatricesExt = "BandedMatrices"
+
+[[deps.MatrixPencils]]
+deps = ["LinearAlgebra", "Polynomials", "Random"]
+git-tree-sha1 = "c00a086f4f1df792c77dc1bd674357044aa08d74"
+uuid = "48965c70-4690-11ea-1f13-43a2532b2fa8"
+version = "1.8.0"
 
 [[deps.MaybeInplace]]
 deps = ["ArrayInterface", "LinearAlgebra", "MacroTools"]
@@ -1842,6 +2548,12 @@ version = "9.49.0"
     DeepDiffs = "ab62b9b5-e342-54a8-a765-a90f495de1a6"
     HomotopyContinuation = "f213a82b-91d6-5c5d-acf7-10f1c761b327"
     LabelledArrays = "2ee39098-c373-598a-b85f-a56591580800"
+
+[[deps.ModelingToolkitStandardLibrary]]
+deps = ["ChainRulesCore", "DiffEqBase", "IfElse", "LinearAlgebra", "ModelingToolkit", "PreallocationTools", "Symbolics"]
+git-tree-sha1 = "2bfc84061d1aefd5b27cea4a355d5d81b2331879"
+uuid = "16a59e39-deab-5bd0-87e4-056b12336739"
+version = "2.19.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
@@ -2279,6 +2991,12 @@ version = "1.40.9"
     ImageInTerminal = "d8c32880-2388-543b-8c61-d9f865259254"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
+[[deps.PlutoUI]]
+deps = ["AbstractPlutoDingetjes", "Base64", "Dates", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "Markdown", "Random", "Reexport", "UUIDs"]
+git-tree-sha1 = "5152abbdab6488d5eec6a01029ca6697dff4ec8f"
+uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+version = "0.7.23"
+
 [[deps.PoissonRandom]]
 deps = ["Random"]
 git-tree-sha1 = "a0f1159c33f846aa77c3f30ebbc69795e5327152"
@@ -2296,6 +3014,24 @@ deps = ["BitTwiddlingConvenienceFunctions", "CPUSummary", "IfElse", "Static", "T
 git-tree-sha1 = "645bed98cd47f72f67316fd42fc47dee771aefcd"
 uuid = "1d0040c9-8b98-4ee7-8388-3f51789ca0ad"
 version = "0.2.2"
+
+[[deps.Polynomials]]
+deps = ["LinearAlgebra", "OrderedCollections", "RecipesBase", "Requires", "Setfield", "SparseArrays"]
+git-tree-sha1 = "27f6107dc202e2499f0750c628a848ce5d6e77f5"
+uuid = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
+version = "4.0.13"
+
+    [deps.Polynomials.extensions]
+    PolynomialsChainRulesCoreExt = "ChainRulesCore"
+    PolynomialsFFTWExt = "FFTW"
+    PolynomialsMakieCoreExt = "MakieCore"
+    PolynomialsMutableArithmeticsExt = "MutableArithmetics"
+
+    [deps.Polynomials.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+    MakieCore = "20f20a25-4f0e-4fdf-b5d1-57303727442b"
+    MutableArithmetics = "d8a4904e-b15c-11e9-3269-09a3773c0cb0"
 
 [[deps.PositiveFactorizations]]
 deps = ["LinearAlgebra"]
@@ -3307,7 +4043,13 @@ version = "1.4.1+1"
 """
 
 # ╔═╡ Cell order:
+# ╠═f4a03d13-c8ce-4a00-99da-4ad5eb51c763
 # ╠═52a3a292-ea00-11ef-2cc9-89572f3efeeb
+# ╠═e9ffb64f-1832-4ce4-9c39-ac23be2e7c18
+# ╠═7c65481c-8ab1-4620-a35a-d26ee0e26c16
+# ╠═b34531cd-9001-466f-8cd1-532a9573bb80
+# ╠═594eadeb-2501-4c68-8a3b-628381e8d1c3
+# ╠═700edb28-78b6-432e-9b9c-4a7ec8c49ce7
 # ╠═681d82e9-c12e-452b-806f-e5e65c63c509
 # ╠═d46273f5-73fd-4a08-90ae-e059fc45cfc2
 # ╠═00241b50-8276-4d91-8395-932b4553d674
@@ -3329,38 +4071,81 @@ version = "1.4.1+1"
 # ╠═1593e565-b3e0-4133-b39a-75dcbb1193a9
 # ╠═fb466028-57c0-44ec-a3d0-7a408442e1a1
 # ╠═950fcd30-957e-4825-a234-55e2b86cf0bd
+# ╠═f7cd13d7-d88a-4803-9e8f-b29c1737ddeb
+# ╠═cf7cf70b-5057-4bce-9ae2-66a6783f4ccc
+# ╠═940ececc-6ddc-4efd-a988-a73a782daed6
+# ╠═28795617-694c-40ac-87c5-07afe309c3c0
+# ╠═39a53894-fb03-43ac-92fd-b18e8330fb71
+# ╠═0a2dd6a6-8d5c-4ca7-b78e-af2caba958f5
+# ╠═ba20246e-6791-465a-be88-971478a803b8
+# ╠═54f02467-88d4-4f52-9714-2f7f8e4f8396
+# ╠═3d4df8ce-ba49-41e7-923f-b6c6503d7ec7
+# ╠═3d270fd8-7bc5-43ea-861f-ab272d67a81d
+# ╠═fc42f8f0-31e4-4cf9-a5e8-64821759fe00
+# ╠═8d03bbe8-c208-4e5b-86f3-2c769efc3d99
+# ╠═ca4f8091-b784-4665-8713-a561e65ee4bb
+# ╠═20996f8e-1c0d-4efe-b1ad-90b69bb0e41d
+# ╠═31ea7715-c1a6-44a4-94b3-a00ffd016622
+# ╠═56b8d818-b827-4cb5-a876-dec2cf90262a
+# ╠═ce852633-8bce-4491-96c2-d11281cfad77
+# ╠═cee71cb3-fa16-4e49-aa77-a9d072eae968
+# ╠═0f23b8bd-241e-4681-af0d-d3927b5527f8
+# ╠═72581724-0ca3-4e63-adfb-169d49d4599c
+# ╠═85de18ca-53e0-4b22-a569-8c99ed8a5fa9
+# ╠═3452a3e3-4bde-42de-87b4-abed90a08aa7
+# ╠═43523756-f44e-4122-bac3-f6e33f01cd33
+# ╠═e529612f-a8c5-404e-9342-1ad7ad9bc50c
+# ╠═0ff5bcab-0389-497b-a254-eb5bdac6e1d5
+# ╠═f7797164-99df-4fd6-92e5-3dd76a8a8f36
+# ╠═d4b88261-657f-447c-989e-ef43e7c0d07e
+# ╠═1d1d961b-1dbd-4d63-a8da-1f7b3a2e9df4
+# ╠═5d5165cf-d7ee-4650-b28a-744aa44ca75b
+# ╠═17d864a3-e4e5-4136-ae14-9fa41ba73659
+# ╠═14d7aa68-928b-46c6-8caa-01e515f610ce
+# ╠═e317faa2-01ab-4856-b63e-56e3282fe06d
 # ╠═75e4bf3a-241e-4a4f-8120-2df2b909ef68
 # ╠═7e6784e3-07b6-4e96-b2a0-e0d0128da90e
+# ╠═d5451d65-9573-483b-b9fe-a79a870e7035
+# ╠═5011f9bf-d2a8-4ea1-8380-e703ddd45993
+# ╠═acbae539-2b69-42b5-b8c5-5a818e9e3f09
+# ╠═cf29de7c-0e1f-46d3-878a-7e5ad3596101
+# ╠═e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
+# ╠═91f82fef-eddf-4715-8576-73efd65bbae9
+# ╠═672d1b69-0d93-4591-bd87-de76979dc0e4
+# ╠═e4fe557b-15ab-4738-8c98-31c61032443d
 # ╠═d1c1fcb2-8139-483f-b4b5-212d8cbe9697
+# ╠═6916e5b4-a2a8-417b-9fa0-86b142b71ba3
+# ╠═74574e2a-148e-4f0e-a9c3-856ff0438584
 # ╠═081c69ab-5e79-4cbd-96d8-dbbe2f092388
 # ╠═fb2f0ba9-b5be-4da5-87cc-a5ed45f6a6ee
 # ╠═36c79577-fba0-4c17-afec-12c5ddd939dd
 # ╠═c34dbbdb-bd7b-4cea-a4ef-dc83fb813a12
-# ╠═e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
-# ╠═66472cd8-2236-4783-adf5-05fcef934bda
-# ╠═49479608-7079-48ef-ae8a-de5fcea796b3
 # ╠═49a77da0-f257-4cb8-aa73-1849a21f97be
 # ╠═8fc05447-78c4-40fa-9989-1a7db8e5d2da
-# ╠═66a9a4bd-c12d-4d56-943a-71a0f3953f99
-# ╠═ae617230-15eb-4622-a39a-3da3215b0046
-# ╠═61f1b664-8781-4a66-928d-59a5dd78dcb1
+# ╠═bf27a03b-d419-41d0-bccf-5b50a556b2ae
+# ╠═8eec0d23-6036-4b4d-98bc-d384cffb37c1
 # ╠═ae90d075-dc5e-47d9-ab22-c7b7307937f9
 # ╠═b8c60c84-2021-4b0f-943e-32a993000afc
 # ╠═be1fd56d-68af-48c8-b96b-4e2259b64baa
 # ╠═15b188e0-4c3a-48f7-a3e4-4f615b1f0afe
+# ╠═0fa65b73-b35f-4f39-990a-3f837ddfede2
 # ╠═d90569cf-764a-468b-b3a1-7536fef43f59
+# ╠═7428ccb3-ea6f-4a04-ae41-7012aba02431
+# ╠═0fda9b53-a3ec-4deb-bf3f-d57686c41346
+# ╠═cca5c862-f17d-4b2f-b40f-4ea62d908825
+# ╠═34cf9e0c-ea39-4d38-9ec8-b4c38a486cad
+# ╠═0aa86481-1c87-4729-9823-778ce8b062b5
+# ╠═35eb6e17-4cea-45de-b2c5-846983793601
+# ╠═2e1ce1ef-24f4-4581-b6dc-b98df795f5d3
+# ╠═a4876ad9-b931-4eb8-beeb-a5132489d87d
+# ╠═1a0ef76a-a734-4150-8740-6beac6264806
+# ╠═e116de95-6f54-43a2-bfd8-d2db7433ea70
+# ╠═89ca6c60-6dd3-4652-83c9-d81892a5f065
+# ╠═1466e67a-39ec-4997-8193-2948822bf404
+# ╠═48bff90f-da0e-4d1a-a28c-5c61fa073cf9
+# ╠═e46ce2f8-398d-4171-9076-bc8d5bc0e121
+# ╠═60563d50-d507-45b7-930d-3b3ff715eebc
 # ╠═cac61228-aded-45ac-908f-19958d9dbba3
-# ╠═85f6e6a6-006c-4c66-93e7-14446363ff82
-# ╠═8c3f2b8d-17c2-4cbc-be06-ee01f9ea2ad0
-# ╠═8ab24f9c-17b7-405a-8d4f-fa300824357f
-# ╠═01aed850-6de0-4561-b6c0-5289338e2c23
-# ╠═c487b842-9958-4015-9823-e6e92cc84ace
-# ╠═3d032982-a274-4fcf-b4a7-1ef4fb8ffe3f
-# ╠═f0bb568a-fd95-4820-b596-fea9889e566d
-# ╠═f1eae636-f631-436a-88c9-e3a7063ffd04
-# ╠═f5b21d58-30b9-4dd6-9e0b-4f048d8931f9
-# ╠═2a56d75b-e30e-45f8-a1f9-c3698c47d751
-# ╠═b288f644-490e-4393-8082-3e1983244983
-# ╠═57c56a6a-29c3-4a66-ae1b-07ca107e7d14
+# ╠═cadc066d-a336-413c-8d8e-3eda5dc95a3b
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

@@ -13,7 +13,7 @@ using ModelingToolkit, DifferentialEquations, CoolProp, Plots
 # ╔═╡ e9ffb64f-1832-4ce4-9c39-ac23be2e7c18
 using ModelingToolkitStandardLibrary
 
-# ╔═╡ 7c65481c-8ab1-4620-a35a-d26ee0e26c16
+# ╔═╡ 0777065e-26f8-416a-802f-09978e4709a5
 using ModelingToolkitStandardLibrary.Blocks
 
 # ╔═╡ b34531cd-9001-466f-8cd1-532a9573bb80
@@ -25,6 +25,12 @@ using ModelingToolkitStandardLibrary.Mechanical.Rotational
 # ╔═╡ 700edb28-78b6-432e-9b9c-4a7ec8c49ce7
 using MacroTools
 
+# ╔═╡ b9ebd899-9e3a-414d-a60c-c129eb884845
+using Interpolations,  LinearAlgebra
+
+# ╔═╡ 64f97427-bf03-4013-af5c-f4087686fe54
+md"""# Import Packages"""
+
 # ╔═╡ 681d82e9-c12e-452b-806f-e5e65c63c509
 @independent_variables t
 
@@ -33,6 +39,9 @@ D = Differential(t)
 
 # ╔═╡ 00241b50-8276-4d91-8395-932b4553d674
 const fluid = "Air"
+
+# ╔═╡ b2bb08e9-8550-4392-b446-20c325fedbe3
+md"""# CoolProp Symbolic Registration"""
 
 # ╔═╡ 3a0e8e9f-ac6d-4bef-bebb-be60f2c4a074
 PropsSI(out::AbstractString, name1::AbstractString, value1::Real, name2::AbstractString, value2::Real, fluid::AbstractString) = CoolProp.PropsSI(out, name1, value1, name2, value2, fluid)
@@ -56,6 +65,12 @@ end
 function hf(p_in, T_in)
     hf = PropsSI("H", "P", p_in, "T", T_in, fluid)
     return PropsSI("H", "P", p_in, "T", T_in, fluid)
+end
+
+# ╔═╡ 5ea4a0a3-b4bb-4490-8e37-4e5bfb5e7a66
+function hfhydrogen(p_in, T_in)
+    hf = PropsSI("H", "P", p_in, "T", T_in, "Hydrogen")
+    return PropsSI("H", "P", p_in, "T", T_in, "Hydrogen")
 end
 
 # ╔═╡ 163ea487-46eb-426f-9948-322637235698
@@ -94,6 +109,9 @@ end
 # ╔═╡ 46a1c45c-014c-4b70-8586-4ee911f38a84
 @register_symbolic hf(p_in, T_in)
 
+# ╔═╡ edd76841-50b2-42ea-85c2-d2874c565f1b
+@register_symbolic hfhydrogen(p_in, T_in)
+
 # ╔═╡ 32c2e97d-6ec7-480f-ad85-0675fd012a65
 @register_symbolic ρ(p_in, T_in)
 
@@ -108,6 +126,12 @@ end
 
 # ╔═╡ 950fcd30-957e-4825-a234-55e2b86cf0bd
 @register_symbolic R_air()
+
+# ╔═╡ 3ecd6e53-24ff-4c27-b237-30b996c31e71
+md"""# Compressor and Turbine Performance Maps"""
+
+# ╔═╡ 13d22477-3051-4efa-9008-932221bf6ee5
+md"""## Compressor and Turbine Performance Data"""
 
 # ╔═╡ f7cd13d7-d88a-4803-9e8f-b29c1737ddeb
 const compressor_data = Dict{Float64, Vector{Tuple{Float64,Float64,Union{Missing,Float64}}}}()
@@ -351,6 +375,9 @@ turbine_data[2084.0] = [
     (0.00005446601941747573,  2.1148936170212767, missing)
 ]
 
+# ╔═╡ 7d568fe0-f33e-4de1-b14a-af3ae251f565
+md"""# Compressor & Turbine Interpolation Function"""
+
 # ╔═╡ 72581724-0ca3-4e63-adfb-169d49d4599c
 function _interp1D_fromPressure(data::Vector{Tuple{Float64,Float64,Union{Missing,Float64}}}, target_pi::Float64)
     # Hanya gunakan data dengan π dan η valid
@@ -446,6 +473,137 @@ turbine_η(Nred, π_t) = turbineMap_fromPressure(Nred, π_t)[2]
 # ╔═╡ e317faa2-01ab-4856-b63e-56e3282fe06d
 @register_symbolic turbine_η(Nred, π_t)
 
+# ╔═╡ 8ad7637b-8b1f-449f-b7a9-ba967546f11a
+md"""# Lookup Table PLoad, N, and mfuel"""
+
+# ╔═╡ eda0c6ea-37bc-48de-bbc3-bb7f4e3eabd0
+function functionBlock_LUT_Pdem(; name = :LUT_Pdem_to_RefSpeed)
+    # Data lookup table
+    PLoad_data = [70000, 80000, 90000, 100000]  # Power in Watts
+    N_data = [(67532.517 * ((2*pi)/60)), (68920.31 * ((2*pi)/60)), (70037.85 * ((2*pi)/60)), (71459 * ((2*pi)/60))]  # RPM
+    
+    @named input = RealInput()
+    @named output = RealOutput()
+    
+    # Create symbolic interpolation function
+    @parameters begin
+        p1 = PLoad_data[1]
+        p2 = PLoad_data[2]
+        p3 = PLoad_data[3]
+        p4 = PLoad_data[4]
+        n1 = N_data[1]
+        n2 = N_data[2]
+        n3 = N_data[3]
+        n4 = N_data[4]
+    end
+    
+    eqs = [
+        output.u ~ ifelse(input.u <= p1, n1,
+                   ifelse(input.u <= p2, n1 + (n2-n1)*(input.u-p1)/(p2-p1),
+                   ifelse(input.u <= p3, n2 + (n3-n2)*(input.u-p2)/(p3-p2),
+                   ifelse(input.u <= p4, n3 + (n4-n3)*(input.u-p3)/(p4-p3),
+                   n4))))
+    ]
+    
+    return compose(ODESystem(eqs, t, name=name), input, output)
+end
+
+# ╔═╡ 26846735-ae26-4c07-96ba-073b23827294
+function functionBlock_LUT_Fuel(; name = :LUT_Speed_to_RefFuel)
+    # Data lookup table
+    N_data = [(61058.0 * ((2*pi)/60)), (62079.0 * ((2*pi)/60)), (64743.0 * ((2*pi)/60)), (66408.0 * ((2*pi)/60))]  # RPM
+    mfuel_data = [0.0081, 0.0082, 0.0084, 0.00867]  # kg/s
+    
+    @named input = RealInput()
+    @named output = RealOutput()
+    
+    # Create symbolic interpolation function
+    @parameters begin
+        n1 = N_data[1]
+        n2 = N_data[2]
+        n3 = N_data[3]
+        n4 = N_data[4]
+        m1 = mfuel_data[1]
+        m2 = mfuel_data[2]
+        m3 = mfuel_data[3]
+        m4 = mfuel_data[4]
+    end
+    
+    eqs = [
+        output.u ~ ifelse(input.u <= n1, m1,
+                   ifelse(input.u <= n2, m1 + (m2-m1)*(input.u-n1)/(n2-n1),
+                   ifelse(input.u <= n3, m2 + (m3-m2)*(input.u-n2)/(n3-n2),
+                   ifelse(input.u <= n4, m3 + (m4-m3)*(input.u-n3)/(n4-n3),
+                   m4))))
+    ]
+    
+    return compose(ODESystem(eqs, t, name=name), input, output)
+end
+
+# ╔═╡ 43b0d385-e8e3-49a9-bbbe-041e66a7015a
+function functionBlock_LUT_TOT(; name = :LUT_TOT_to_mfuel)
+    # Data lookup table (random values)
+    TOT_data = [800.0, 850.0, 900.0, 918.15, 1000.0]  # Temperature in Kelvin
+    mfuel_data = [0.0081, 0.0083, 0.00845, 0.00868, 0.0087]  # Mass flow rate in kg/s
+    
+    @named input = RealInput()
+    @named output = RealOutput()
+    
+    # Create symbolic interpolation function
+    @parameters begin
+        t1 = TOT_data[1]
+        t2 = TOT_data[2]
+        t3 = TOT_data[3]
+        t4 = TOT_data[4]
+        t5 = TOT_data[5]
+        m1 = mfuel_data[1]
+        m2 = mfuel_data[2]
+        m3 = mfuel_data[3]
+        m4 = mfuel_data[4]
+        m5 = mfuel_data[5]
+    end
+    
+    eqs = [
+        output.u ~ ifelse(input.u <= t1, m1,
+                   ifelse(input.u <= t2, m1 + (m2-m1)*(input.u-t1)/(t2-t1),
+                   ifelse(input.u <= t3, m2 + (m3-m2)*(input.u-t2)/(t3-t2),
+                   ifelse(input.u <= t4, m3 + (m4-m3)*(input.u-t3)/(t4-t3),
+                   ifelse(input.u <= t5, m4 + (m5-m4)*(input.u-t4)/(t5-t4),
+                   m5)))))
+    ]
+    
+    return compose(ODESystem(eqs, t, name=name), input, output)
+end
+
+# ╔═╡ e540a42b-fecd-46b3-9e1a-aeb0ce06e52f
+md"""# Costum Component Blocks"""
+
+# ╔═╡ 00f5f98b-f292-4a58-a4d7-a1e16535f335
+function TOT_Reference_Logic(; name = :TOT_ref_logic)
+    @named Tamb = RealInput()    # Input suhu ambient [K]
+    @named TOT_ref = RealOutput() # Output referensi TOT [K]
+    
+    @parameters begin
+        T_amb_ref = 300    	   # 27°C dalam Kelvin
+        TOT_base = 923.15      # 645°C dalam Kelvin (nilai referensi dasar)
+        k_slope = 5.0          # Penurunan TOT per derajat penurunan Tamb (dalam K)
+        TOT_max = 923.15       # Batas atas TOT [K]
+        TOT_min = 873.15       # Batas bawah TOT [K] (~600°C)
+    end
+
+    eqs = [
+        # Hitung TOT_ref dengan linear compensation di bawah T_amb_ref
+        TOT_ref.u ~ min(TOT_max, 
+            max(TOT_min, 
+                TOT_base - k_slope*(T_amb_ref - Tamb.u)))
+    ]
+    
+    return compose(ODESystem(eqs, t, name=name), [Tamb, TOT_ref])
+end
+
+# ╔═╡ 97299aad-c6f1-4ca9-bc04-f3809c0950af
+md"""# Define Connectors and Ports"""
+
 # ╔═╡ 75e4bf3a-241e-4a4f-8120-2df2b909ef68
 @connector  function Port(;name) 
 vars = @variables begin 
@@ -487,9 +645,6 @@ end
 # ╔═╡ 5011f9bf-d2a8-4ea1-8380-e703ddd45993
 function SourcePressure(;name,source_pressure) 
     @named PresPort = PressurePort()
-    para = @parameters begin
-        
-    end
     vars = @variables begin
 		p(t), [input = true]
      end
@@ -497,7 +652,7 @@ function SourcePressure(;name,source_pressure)
     eqs = [
         PresPort.p ~ source_pressure
     ]
-    compose(ODESystem(eqs, t, vars, para;name), PresPort)
+    compose(ODESystem(eqs, t, vars, [];name), PresPort)
 end
 
 # ╔═╡ acbae539-2b69-42b5-b8c5-5a818e9e3f09
@@ -511,9 +666,7 @@ end
 # ╔═╡ cf29de7c-0e1f-46d3-878a-7e5ad3596101
 function SourceTemperature(;name,source_temperature) 
     @named TempPort = TemperaturePort()
-    para = @parameters begin
-        
-    end
+	
     vars = @variables begin
 		T(t), [input = true]
      end
@@ -521,15 +674,12 @@ function SourceTemperature(;name,source_temperature)
     eqs = [
 		TempPort.T ~ source_temperature
     ]
-    compose(ODESystem(eqs, t, vars, para;name), TempPort)
+    compose(ODESystem(eqs, t, vars, [];name), TempPort)
 end
 
 # ╔═╡ e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
 function WasteHeat(;name) 
-    @named    TempPort = TemperaturePort()
-    para = @parameters begin
-        
-    end
+    @named TempPort = TemperaturePort()
     vars = @variables begin
 		T(t)
      end
@@ -537,7 +687,20 @@ function WasteHeat(;name)
    eqs = [
 		T ~ TempPort.T
    ]
-   compose(ODESystem(eqs, t, vars, para;name), TempPort)
+   compose(ODESystem(eqs, t, vars, [];name), TempPort)
+end
+
+# ╔═╡ 2471950c-0311-45e6-8beb-9ce8068156b9
+function AmbientOutPressure(;name) 
+    @named    PresPort = PressurePort()
+    vars = @variables begin
+		p(t)
+     end
+
+   eqs = [
+		p ~ PresPort.p
+   ]
+   compose(ODESystem(eqs, t, vars, [];name), PresPort)
 end
 
 # ╔═╡ 91f82fef-eddf-4715-8576-73efd65bbae9
@@ -564,109 +727,93 @@ end
 ODESystem(Equation[], t, vars, [];name=name)
 end
 
-# ╔═╡ d1c1fcb2-8139-483f-b4b5-212d8cbe9697
-function Compressor(;name, ṁ_comp = 0.5, η_c_is = 0.85, π_c = 3.0)
-	@named inport = Port()
-    @named outport = Port()
-	para = @parameters begin
-		m_cas_comp = 105,   [description = "Mass Casing Compressor (kg)"]
-		c_casing = 500, 	[description = "Specific Heat Casing Compressor (J/kg·K)"]
-		κa = cp(inport.T)/cv(inport.T)
-		γ_a = (κa-1) / κa
-	end
-	
-	vars = @variables begin
-		T2(t), 				[description = "Temperature outlet compressor (K)"]
-	end
-	
-	eqs = [ D(T2) ~ (1 / (m_cas_comp * c_casing)) * (ṁ_comp *(h(outport.p,outport.T) 		- h(outport.p, T2)))
-			outport.p ~ π_c * inport.p
-			outport.T ~ inport.T * (1 + (1 / η_c_is) * (π_c^(γ_a) - 1))
-            outport.mdot ~ inport.mdot
-			outport.P ~ inport.P - (ṁ_comp * (h(outport.p, outport.T) - h(inport.p, inport.T)))]    
-   compose(ODESystem(eqs, t, vars, para;name), inport, outport)
-end
+# ╔═╡ f4d42d42-92ab-4225-9a80-dfca5d7ebab8
+md"""# Physical Model for Every Component"""
 
-# ╔═╡ 6916e5b4-a2a8-417b-9fa0-86b142b71ba3
-function CompressorWithMap(; name, target_pi = 3.0)
-	@named InPresPort = PressurePort()
-	@named InPresPortFromRec = PressurePort()
-	@named InTempPort = TemperaturePort()
-	@named OutPresPort = PressurePort()
-	@named OutTempPort = TemperaturePort()
-	@named OutPowPort = PowerPort()
-	@named OutMdotPort = MassFlowPort()
-    @named shaftin = Shaft()
-
-    para = @parameters begin
+# ╔═╡ 393aaac9-eaf2-4feb-be85-0eddd9f9def2
+@mtkmodel SteadyStateCompressor begin
+    @parameters begin
         m_cas_comp = 105,    [description="Mass Casing Compressor (kg)"]
         c_casing = 500,      [description="Specific Heat Casing (J/kg·K)"]
-        κa = cp(InTempPort.T) / cv(InTempPort.T)
-        γ_a = (κa - 1) / κa
+        target_pi = 4.4189,     [description="Target pressure ratio"]
     end
 
-    vars = @variables begin
-        T2(t),             [description="Casing temperature compressor (K)"]
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        OutPowPort = PowerPort()
+        OutMdotPort = MassFlowPort()
+        shaftin = Shaft()
+    end
+
+    @variables begin
+        T2(t) = 300,       [description="Casing temperature compressor (K)"]
         Nred(t),           [description="Reduced speed"]
         ṁ_comp(t),         [description="Compressor mass flow rate (kg/s)"]
         η_c_is(t),         [description="Isentropic efficiency of compressor"]
+		κa(t)
+		γ_a(t)
     end
 
-    eqs = [
-        Nred ~ (60 / (2π)) * (shaftin.ω / sqrt(InTempPort.T)),
-        ṁ_comp ~ compressor_m(Nred, target_pi),  # Gunakan fungsi pembantu
-        η_c_is ~ compressor_η(Nred, target_pi),  # Gunakan fungsi pembantu
-        OutMdotPort.mdot ~ ṁ_comp * (InPresPort.p/sqrt(InTempPort.T)),
-        OutPresPort.p ~ target_pi * (InPresPort.p + InPresPortFromRec.p),
-        OutTempPort.T ~ InTempPort.T * (1 + (1 / η_c_is) * (target_pi^γ_a - 1)),
-        D(T2) ~ (1 / (m_cas_comp * c_casing)) * (OutMdotPort.mdot) * (h( OutPresPort.p, OutTempPort.T) - h( OutPresPort.p, T2)),
-        OutPowPort.P ~ (OutMdotPort.mdot) * (h( OutPresPort.p, OutTempPort.T) - h(InPresPort.p, InTempPort.T))]
-
-    compose(ODESystem(eqs, t, vars, para; name), InPresPort, InPresPortFromRec, InTempPort, OutPresPort, OutTempPort, OutPowPort, OutMdotPort, shaftin)
+    @equations begin
+		κa ~ cp(InTempPort.T) / cv(InTempPort.T)
+		γ_a ~ (κa - 1) / κa
+        Nred ~ (60 / (2π)) * (shaftin.ω / sqrt(InTempPort.T))
+        ṁ_comp ~ compressor_m(Nred, target_pi)  # Gunakan fungsi pembantu
+        η_c_is ~ compressor_η(Nred, target_pi)  # Gunakan fungsi pembantu
+        OutMdotPort.mdot ~ ṁ_comp * (InPresPort.p/sqrt(InTempPort.T))
+        OutPresPort.p ~ target_pi * InPresPort.p
+        OutTempPort.T ~ InTempPort.T * (1 + (1 / η_c_is) * (target_pi^γ_a - 1))
+        D(T2) ~ (1 / (m_cas_comp * c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T2))
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(InPresPort.p, InTempPort.T))
+    end
 end
 
-# ╔═╡ 74574e2a-148e-4f0e-a9c3-856ff0438584
-function TurbineWithMap(; name, π_t = 3.4)
-	@named InPresPortFromCC = PressurePort()
-	@named InPresPortFromRec = PressurePort()
-	@named InTempPort = TemperaturePort()
-	@named OutPresPort = PressurePort()
-	@named OutTempPort = TemperaturePort()
-	@named OutPowPort = PowerPort()
-	@named OutMdotPort = MassFlowPort()
-    @named TOTSensor = TemperatureSensor()
-    @named shaftin = Shaft()
-
-    para = @parameters begin
-        m_cas_turb = 122.2,  [description="Turbine casing mass (kg)"]
-        c_casing = 500,       [description="Specific Heat Casing Turbine (J/kg·K)"]
-        κg = cp(InTempPort.T) / cv(InTempPort.T)
-        γ_g = (κg - 1) / κg
+# ╔═╡ fa9a32f6-b750-4c11-b0e5-0478ab783807
+@mtkmodel ControlCompressor begin
+    @parameters begin
+        m_cas_comp = 105,    [description="Mass Casing Compressor (kg)"]
+        c_casing = 500,      [description="Specific Heat Casing (J/kg·K)"]
+        target_pi = 4.4189,     [description="Target pressure ratio"]
     end
 
-    vars = @variables begin
-        T4(t),       [description="Turbine Outlet Temperature (K)"]
-        Nred_t(t),   [description="Reduced speed turbine"]
-        ṁ_turb(t),   [description="Turbine mass flow from map"]
-        eff_t(t),    [description="Turbine efficiency from map"]
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        OutPowPort = PowerPort()
+        OutMdotPort = MassFlowPort()
+        shaftin = Shaft()
     end
 
-    eqs = [ 
-        Nred_t ~ (60/(2π)) * (shaftin.ω / sqrt(InTempPort.T)),
-        ṁ_turb ~ turbine_m(Nred_t, π_t),
-        eff_t ~ turbine_η(Nred_t, π_t),
-        OutMdotPort.mdot ~ ṁ_turb * ((InPresPortFromCC.p + InPresPortFromRec.p)/sqrt(InTempPort.T)),
-        OutPresPort.p ~ (InPresPortFromCC.p + InPresPortFromRec.p) / π_t,
-        OutTempPort.T ~ InTempPort.T * (1 - eff_t*(1 - π_t^(-γ_g))),
-        D(T4) ~ (1 / (m_cas_turb*c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T4)),
-        OutPowPort.P ~ (OutMdotPort.mdot) * (h((InPresPortFromCC.p + InPresPortFromRec.p), InTempPort.T) - h(OutPresPort.p, OutTempPort.T)),
-        TOTSensor.T ~ T4]
-    
-    compose(ODESystem(eqs, t, vars, para; name), InPresPortFromCC, InPresPortFromRec, InTempPort, OutPresPort,OutTempPort,OutPowPort,OutMdotPort,shaftin, TOTSensor)
+    @variables begin
+        T2(t) = 450,             [description="Casing temperature compressor (K)"]
+        Nred(t),           [description="Reduced speed"]
+        ṁ_comp(t),         [description="Compressor mass flow rate (kg/s)"]
+        η_c_is(t),         [description="Isentropic efficiency of compressor"]
+		κa(t)
+		γ_a(t)
+    end
+
+    @equations begin
+		κa ~ cp(InTempPort.T) / cv(InTempPort.T)
+		γ_a ~ (κa - 1) / κa
+        Nred ~ (60 / (2π)) * (shaftin.ω / sqrt(InTempPort.T))
+        ṁ_comp ~ compressor_m(Nred, target_pi)  # Gunakan fungsi pembantu
+        η_c_is ~ compressor_η(Nred, target_pi)  # Gunakan fungsi pembantu
+        OutMdotPort.mdot ~ ṁ_comp * (InPresPort.p/sqrt(InTempPort.T))
+        OutPresPort.p ~ target_pi * InPresPort.p
+        OutTempPort.T ~ InTempPort.T * (1 + (1 / η_c_is) * (target_pi^γ_a - 1))
+        D(T2) ~ (1 / (m_cas_comp * c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T2))
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(InPresPort.p, InTempPort.T))
+    end
 end
 
 # ╔═╡ 081c69ab-5e79-4cbd-96d8-dbbe2f092388
-function Recuperator(; name, A_total = 10000.0, N = 3)
+function SteadyStateRecuperator(; name, A_total = 35000, N = 3)
 	@named InPresPort_hot = PressurePort()
 	@named InTempPort_hot = TemperaturePort()
 	@named InMdotPort_hot = MassFlowPort()
@@ -684,8 +831,8 @@ function Recuperator(; name, A_total = 10000.0, N = 3)
     para = (
         cp_h = 500.0,
         cp_c = 500.0,
-        m_dot_h = 0.508694,
-        m_dot_c = 0.5,
+        m_dot_h = 0.65,
+        m_dot_c = 0.65,
         h_h = 100.0,
         h_c = 100.0,
         m_w = 185.0,
@@ -742,296 +889,1700 @@ function Recuperator(; name, A_total = 10000.0, N = 3)
     return comp_sys
 end
 
-# ╔═╡ fb2f0ba9-b5be-4da5-87cc-a5ed45f6a6ee
-function CombustionChamber(;name)
-	@named InPresPort = PressurePort()
-	@named InTempPort = TemperaturePort()
-	@named InMdotPortFromCompressor = MassFlowPort()
-	@named InMdotPortFromTurbine = MassFlowPort()
-	@named OutPresPort = PressurePort()
-	@named OutPresPort2 = PressurePort()
-	@named OutTempPort = TemperaturePort()
-	@named ṁ_fuel = RealInput()
+# ╔═╡ 32b6d965-9dd6-45be-a4ec-27d4b6d7f0e1
+function ControlRecuperator(; name, A_total = 35000.0, N = 3)
+	@named InPresPort_hot = PressurePort()
+	@named InTempPort_hot = TemperaturePort()
+	@named InMdotPort_hot = MassFlowPort()
+	@named OutPresPort_hot = PressurePort()
+	@named OutTempPort_hot = TemperaturePort()
+	@named OutMdotPort_hot = MassFlowPort()
+    @named InPresPort_cold = PressurePort()
+	@named InTempPort_cold = TemperaturePort()
+	@named InMdotPort_cold = MassFlowPort()
+	@named OutPresPort_cold = PressurePort()
+	@named OutTempPort_cold = TemperaturePort()
+	@named OutMdotPort_cold = MassFlowPort()
 
-    pars = @parameters begin
+    # Parameter sistem didefinisikan sebagai NamedTuple (nilai numerik)
+    para = (
+        cp_h = 500.0,
+        cp_c = 500.0,
+        m_dot_h = 0.65,
+        m_dot_c = 0.65,
+        h_h = 100.0,
+        h_c = 100.0,
+        m_w = 185.0,
+        c_w = 500.0,
+        σ_h = 0.98,
+        σ_c = 0.95,
+        A = A_total / N
+    )
+
+    @independent_variables t
+    @variables T_w(t)[1:3]
+    @variables T_h_out(t)[1:3]
+    @variables T_c_out(t)[1:3]
+    
+    # Inisialisasi vektor persamaan dengan tipe Equation
+    eqs = Equation[]
+    
+    for i in 1:3
+        # Definisikan suhu masuk fluida
+        T_h_in_i = (i == 1) ? InTempPort_hot.T : T_h_out[i-1]
+        T_c_in_i = (i == 3) ? InTempPort_cold.T : T_c_out[i+1]
+        
+        # Persamaan untuk fluida panas
+        push!(eqs, T_h_out[i] ~ ((para.m_dot_h * para.cp_h * T_h_in_i - 0.5 * para.h_h * para.A) * T_h_in_i + para.h_h * para.A * T_w[i]) /
+                                ((para.m_dot_h * para.cp_h * T_h_in_i) + (0.5 * para.h_h * para.A)))
+        # Persamaan untuk fluida dingin
+        push!(eqs, T_c_out[i] ~ ((para.m_dot_c * para.cp_c * T_c_in_i - 0.5 * para.h_c * para.A) * T_c_in_i + para.h_c * para.A * T_w[i]) /
+                                ((para.m_dot_c * para.cp_c * T_c_in_i) + (0.5 * para.h_c * para.A)))
+        
+        # Persamaan diferensial untuk perubahan suhu dinding
+		Q_h = para.m_dot_h * (h(InPresPort_hot.p, T_h_in_i) - h(InPresPort_hot.p, T_h_out[i]))
+		Q_c = para.m_dot_c * (h(InPresPort_cold.p, T_c_out[i]) - h(InPresPort_cold.p, T_c_in_i))
+        push!(eqs, Differential(t)(T_w[i]) ~ (Q_h - Q_c) / ((para.m_w / N) * para.c_w))
+    end
+    
+    # Kondisi batas port
+    push!(eqs, OutTempPort_hot.T ~ T_h_out[3])
+    push!(eqs, OutTempPort_cold.T ~ T_c_out[1])
+    push!(eqs, OutPresPort_hot.p ~ InPresPort_hot.p * para.σ_h)
+    push!(eqs, OutPresPort_cold.p ~ InPresPort_cold.p * para.σ_c)
+    push!(eqs, OutMdotPort_hot.mdot ~ -para.m_dot_h)
+    push!(eqs, OutMdotPort_cold.mdot ~ -para.m_dot_c)
+    
+    # Gabungkan semua variabel keadaan ke dalam satu vektor
+    flat_vars = vcat(T_w..., T_h_out..., T_c_out...)
+    
+    # Buat sistem ODE
+    sys = ODESystem(eqs, t, flat_vars, []; name=name)
+    
+    # Komposisi sistem dengan semua port dalam satu vektor
+    ports = [InPresPort_hot, InTempPort_hot, InMdotPort_hot, OutPresPort_hot, OutTempPort_hot, OutMdotPort_hot, InPresPort_cold, InTempPort_cold, InMdotPort_cold, OutPresPort_cold, OutTempPort_cold, OutMdotPort_cold]
+    comp_sys = compose(sys, ports)
+    
+    return comp_sys
+end
+
+# ╔═╡ b5a4429b-9fcf-4273-a201-71719fde0b70
+@mtkmodel SteadyStateCombustionChamber begin
+    @parameters begin
+        η_comb = 0.97,        [description = "Combustor efficiency"]
+        σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
+        V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
+        LHV = 40.564e6,       [description = "Lower Heating Value (J/kg)"]
+        Tf = 303.15,          [description = "Fuel Temperature (K)"]
+        pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
+        ρf = 0.8217,          [description = "Fuel Density (kg/m^3)"]
+		ṁ_fuel = 0.00869,    [description = "Fuel mass flow rate"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        T3(t) = 950, [description = "Internal energy in combustor"]
+        p3(t), [description = "Combustor pressure"]
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + ṁ_fuel) -  InMdotPortFromTurbine.mdot) / V_comb
+        D(T3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + ṁ_fuel * hf(pf, Tf) + (η_comb * ṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(p3, OutTempPort.T) - (cv(T3)*T3)*(InMdotPortFromCompressor.mdot + ṁ_fuel - InMdotPortFromTurbine.mdot))
+        p3 ~ ρ3 * R_air() * T3
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ T3
+    end
+end
+
+# ╔═╡ 42430338-3ae1-4627-a799-45c14a0bb019
+@mtkmodel OGSteadyStateCombustionChamber begin
+    @parameters begin
         η_comb = 0.97,        [description = "Combustor efficiency"]
         σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
         V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
         LHV = 40.564e6,       [description = "Lower Heating Value (J/kg)"]
         m_cas_comb = 10.0,    [description = "Combustor casing mass (kg)"]
-        c_casing = 500,         [description = "Specific heat capacity of casing (J/kg·K)"]
+        c_casing = 500,       [description = "Specific heat capacity of casing (J/kg·K)"]
         Tf = 303.15,          [description = "Fuel Temperature (K)"]
         pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
         ρf = 0.8217,          [description = "Fuel Density (kg/m^3)"]
-		ṁ_fuel(t) = 0.00701
+		ṁ_fuel = 0.0081, [description = "Fuel mass flow rate"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        T3(t) = 950, [description = "Internal energy in combustor"]
+        p3(t), [description = "Combustor pressure"]
+		u3(t)
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + ṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb
+        D(u3) ~ (1 / (ρ3 * V_comb)) * ((InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + (ṁ_fuel * hf(pf, Tf)) + (η_comb * ṁ_fuel * LHV) - (InMdotPortFromTurbine.mdot * h(p3, T3)) - (u3 * (InMdotPortFromCompressor.mdot + ṁ_fuel - InMdotPortFromTurbine.mdot))))
+        p3 - (ρ3 * R_air() * T3) ~ 0
+		u3 - u(p3,T3) ~ 0
+		
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ T3
+    end
+end
+
+# ╔═╡ 554b968f-0f5e-401d-a1ed-2e1467764992
+@mtkmodel ControlCombustionChamber begin
+    @parameters begin
+        η_comb = 0.97,        [description = "Combustor efficiency"]
+        σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
+        V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
+        LHV = 40.564e6,       [description = "Lower Heating Value (J/kg)"]
+        Tf = 303.15,          [description = "Fuel Temperature (K)"]
+        pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
+        ρf = 0.8217,          [description = "Fuel Density (kg/m^3)"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        ṁ_fuel = RealInput()
+		T3 = RealOutput()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        xT3(t) = 300, [description = "Internal energy in combustor"]
+        p3(t), [description = "Combustor pressure"]
+		xṁ_fuel(t)
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + xṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb
+        D(xT3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + xṁ_fuel * hf(pf, Tf) + (η_comb * xṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(p3, OutTempPort.T) - (cv(xT3)*xT3)*(InMdotPortFromCompressor.mdot + xṁ_fuel - InMdotPortFromTurbine.mdot))
+        p3 ~ ρ3 * R_air() * OutTempPort.T
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ xT3
+
+		xT3 ~ T3.u
+        xṁ_fuel ~ ṁ_fuel.u
+    end
+end
+
+# ╔═╡ f6be609b-fa10-4c09-8e9d-9d1c1c66479e
+@mtkmodel ControlCombustionChamberForPowerControl begin
+    @parameters begin
+        η_comb = 0.97,        [description = "Combustor efficiency"]
+        σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
+        V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
+        LHV = 40.564e6,       [description = "Lower Heating Value (J/kg)"]
+        Tf = 303.15,          [description = "Fuel Temperature (K)"]
+        pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
+        ρf = 0.8217,          [description = "Fuel Density (kg/m^3)"]
+		xṁ_fuel = 0.00869
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        ṁ_fuel = RealInput()
+		T3 = RealOutput()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        xT3(t) = 300, [description = "Internal energy in combustor"]
+        p3(t), [description = "Combustor pressure"]
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + xṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb
+        D(xT3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + xṁ_fuel * hf(pf, Tf) + (η_comb * xṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(p3, OutTempPort.T) - (cv(xT3)*xT3)*(InMdotPortFromCompressor.mdot + xṁ_fuel - InMdotPortFromTurbine.mdot))
+        p3 ~ ρ3 * R_air() * OutTempPort.T
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ xT3
+
+		xT3 ~ T3.u
+        xṁ_fuel ~ ṁ_fuel.u
+    end
+end
+
+# ╔═╡ ada11575-9002-420d-9dd5-743ea0039af1
+@mtkmodel SteadyStateCombustionChamberHydrogen begin
+    @parameters begin
+        η_comb = 0.97,        [description = "Combustor efficiency"]
+        σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
+        V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
+        LHV = 119.96e6,       [description = "Lower Heating Value (J/kg)"]
+        m_cas_comb = 10.0,    [description = "Combustor casing mass (kg)"]
+        c_casing = 500,       [description = "Specific heat capacity of casing (J/kg·K)"]
+        Tf = 290,          [description = "Fuel Temperature (K)"]
+        pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
+        ρf = 0.485,          [description = "Fuel Density (kg/m^3)"]
+		ṁ_fuel(t) = 0.00285, [description = "Fuel mass flow rate"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        T3(t) = 950, [description = "Internal energy in combustor"]
+        TIT(t) = 950, [description = "Turbine Inlet Temperature"]
+        p3(t), [description = "Combustor pressure"]
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + ṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb
+        D(T3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + ṁ_fuel * hfhydrogen(pf, Tf) + (η_comb * ṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(p3, OutTempPort.T) - (cv(T3)*T3)*(InMdotPortFromCompressor.mdot + ṁ_fuel - InMdotPortFromTurbine.mdot))
+        D(TIT) ~ (InMdotPortFromTurbine.mdot * (h(p3, OutTempPort.T) - h(p3, TIT))) / (m_cas_comb * c_casing)
+        p3 ~ ρ3 * R_air() * OutTempPort.T
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ T3
+    end
+end
+
+# ╔═╡ cb533bc0-4e11-4741-b8dd-f9f14d5b02cf
+@mtkmodel ControlCombustionChamberHydrogen begin
+    @parameters begin
+        η_comb = 0.97,        [description = "Combustor efficiency"]
+        σ_comb = 0.945,       [description = "Artificial Pressure Losses"]
+        V_comb = 5.5422e-3,   [description = "Combustor Volume (m^3)"]
+        LHV = 119.96e6,       [description = "Lower Heating Value (J/kg)"]
+        m_cas_comb = 10.0,    [description = "Combustor casing mass (kg)"]
+        c_casing = 500,       [description = "Specific heat capacity of casing (J/kg·K)"]
+        Tf = 290,          [description = "Fuel Temperature (K)"]
+        pf = 600000,          [description = "Fuel Pressure (Pa) (6 bar)"]
+        ρf = 0.485,          [description = "Fuel Density (kg/m^3)"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        InMdotPortFromCompressor = MassFlowPort()
+        InMdotPortFromTurbine = MassFlowPort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        ṁ_fuel = RealInput()
+    end
+
+    @variables begin
+        ρ3(t) = 15, [description = "Density in combustor"]
+        T3(t) = 950, [description = "Internal energy in combustor"]
+        TIT(t) = 950, [description = "Turbine Inlet Temperature"]
+        p3(t), [description = "Combustor pressure"]
+		xṁ_fuel(t) = 0.001, [description = "Fuel mass flow rate"]
+    end
+
+    @equations begin
+        D(ρ3) ~ ((InMdotPortFromCompressor.mdot + xṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb
+        D(T3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + xṁ_fuel * hfhydrogen(pf, Tf) + (η_comb * xṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(p3, OutTempPort.T) - (cv(T3)*T3)*(InMdotPortFromCompressor.mdot + xṁ_fuel - InMdotPortFromTurbine.mdot))
+        D(TIT) ~ (InMdotPortFromTurbine.mdot * (h(p3, OutTempPort.T) - h(p3, TIT))) / (m_cas_comb * c_casing)
+        p3 ~ ρ3 * R_air() * OutTempPort.T
+        OutPresPort.p ~ p3 * σ_comb
+        OutTempPort.T ~ T3
+		
+        xṁ_fuel ~ ṁ_fuel.u
+    end
+end
+
+# ╔═╡ a082757b-48a4-4d57-b784-0af88ce03857
+function ConcentratedSolarThermal(; name)
+    @named InPresPort = PressurePort()
+    @named InTempPort = TemperaturePort()
+    @named InMdotPort = MassFlowPort()
+    @named InPowPort = PowerPort()
+    @named OutPresPort = PressurePort()
+    @named OutTempPort = TemperaturePort()
+    @named OutMdotPort = MassFlowPort()
+
+    pars = @parameters begin
+        # Receiver parameters
+        m_receiver = 10000     # Mass of receiver [kg] (from Table 4)
+        Cp_receiver = 500      # Specific heat capacity [J/kg·K] (typical value for steel)
+        S_sol = 1500           # Receiver surface area [m²] (from Table 4)
+        C = 1000               # Concentration ratio [-]
+        H_receiver_HTF = 150   # Heat transfer coefficient [W/m²·K] (from Table 4)
+        S_receiver_HTF = 18000 # Heat transfer area [m²] (from Table 4)
+		Vhtf = 50
+        
+        # HTF channel parameters (for pressure drop calculation)
+        Δz = 1.0              # Foam thickness [m]
+        ϵ = 0.8               # Porosity ratio [-]
+        dp = 0.001            # Average pore diameter [m]
+        
+        # Fluid properties (for air at ~600°C)
+        μ_HTF = 3.5e-5        # Dynamic viscosity [Pa·s]
+        λ_HTF = 0.05          # Thermal conductivity [W/m·K]
+		q_sol = 1361 		  # Solar flux [W/m²]
+
+		# Parameter fixed
+		T_htf_out = 1200
     end
 
     vars = @variables begin
-        ρ3(t), [description = "Density in combustor"]
-        T3(t), [description = "Internal energy in combustor"]
-		TIT(t)
+        T_receiver(t)          # Receiver temperature [K]
+		h_HTF(t)
+
+        # Intermediate variables
+        up(t)                 # Velocity in pores [m/s]
+        Re(t)                 # Reynolds number
+        Pr(t)                 # Prandtl number
+        Nu(t)                 # Nusselt number
+        Δp(t)                 # Pressure drop [Pa]
     end
 
-    # Define equations (steady-state: time derivatives are zero)
-    eqs = [ D(ρ3) ~ ((InMdotPortFromCompressor.mdot + ṁ_fuel) - InMdotPortFromTurbine.mdot) / V_comb,
-			D(T3) ~ (1 / (ρ3 * V_comb*cv(OutTempPort.T))) * (InMdotPortFromCompressor.mdot * h(InPresPort.p, InTempPort.T) + ṁ_fuel * hf(pf, Tf) + (η_comb * ṁ_fuel * LHV) - InMdotPortFromTurbine.mdot * h(OutPresPort2.p, OutTempPort.T) - (cv(T3)*T3)*(InMdotPortFromCompressor.mdot + ṁ_fuel - InMdotPortFromTurbine.mdot)),
-			D(TIT) ~ (InMdotPortFromTurbine.mdot * (h(OutPresPort2.p, OutTempPort.T) - h(OutPresPort2.p, TIT))) / (m_cas_comb * c_casing),
-        	OutPresPort2.p ~ ρ3 * R_air() * OutTempPort.T,
-			OutPresPort.p ~ OutPresPort2.p * σ_comb,
-			OutTempPort.T ~ T3]
-	
-    compose(ODESystem(eqs, t, name=name), InPresPort, InTempPort,  InMdotPortFromCompressor, InMdotPortFromTurbine, OutPresPort, OutPresPort2, OutTempPort)
+    eqs = [
+        D(T_receiver) ~ (q_sol * S_sol * C + S_receiver_HTF * H_receiver_HTF * (T_receiver - (InTempPort.T +T_htf_out)/2)) / (m_receiver * Cp_receiver),
+
+		# Energy balance for receiver temperature
+		D(h_HTF) ~ (S_receiver_HTF * H_receiver_HTF * (T_receiver - (InTempPort.T + T_htf_out)/2) - InMdotPort.mdot * (h(OutPresPort.p, T_htf_out)-h(InPresPort.p, InTempPort.T))) / Vhtf * ρ(InPresPort.p, InTempPort.T),
+		
+        # Pressure drop calculations
+        up ~ InMdotPort.mdot/ (ρ(InPresPort.p, InTempPort.T) * S_sol * ϵ),  # Pore velocity
+        Re ~ up * dp * ρ(InPresPort.p, InTempPort.T) / μ_HTF,
+        Pr ~ μ_HTF * cp(InTempPort.T) / λ_HTF,
+        Nu ~ 0.76 * Re^0.4 * Pr^0.37,     # Albanakis correlation
+        
+        # Wu correlation for pressure drop
+        Δp ~ Δz * ((1039 - 1002*ϵ)/dp^2 * μ_HTF * up + 0.5138*ϵ^-5.739/dp * ρ(InPresPort.p, InTempPort.T) * up^2),
+		
+        # Connect ports
+		OutTempPort.T ~ T_htf_out,
+        OutPresPort.p ~ InPresPort.p - Δp,
+        OutMdotPort.mdot ~ InMdotPort.mdot
+    ]
+
+    compose(ODESystem(eqs, t; name=name), 
+            InPresPort, InTempPort, InMdotPort, InPowPort, 
+            OutPresPort, OutTempPort, OutMdotPort)
 end
 
-# ╔═╡ 36c79577-fba0-4c17-afec-12c5ddd939dd
-function Turbine(;name, ṁ_t = 0.508694, η_turb_is = 0.95, π_t = 3.4)
-	@named inport = Port()
-    @named outport = Port()
-	@named TOTSensor = TemperatureSensor()
-	
-	para = @parameters begin
-		m_cas_turb = 122.2, 		[description = "Turbine casing mass (kg)"]
-        c_casing = 500, 		[description = "Specific Heat Casing Turbine (J/kg·K)"]
-		κg = cp(inport.T)/cv(inport.T)
-		γ_g = (κg - 1) / κg
-	end
-	
-	vars = @variables begin
-		T4(t), 					[description = "Turbine Outlet Temperature (K)"]
-	end
-	
-	eqs = [ D(T4) ~ (1 / (m_cas_turb * c_casing)) * (ṁ_t * (h(outport.p, outport.T) 		- h(outport.p, T4)))
-			outport.p ~ inport.p / π_t 
-			outport.T ~ inport.T * (1 - η_turb_is * (1 - π_t^(-γ_g)))
-            outport.mdot ~ inport.mdot
-			outport.P ~ inport.P + (ṁ_t * (h(inport.p, inport.T) - h(outport.p, outport.T)))
-			TOTSensor.T ~ T4]	
+# ╔═╡ fb8e89a3-f92a-450f-9894-ab6ddb5e3d30
+@mtkmodel SteadyStateTurbine begin
+    @parameters begin
+        π_t = 3.8585,        [description="Pressure ratio"]
+        m_cas_turb = 122.2,  [description="Turbine casing mass (kg)"]
+        c_casing = 500,      [description="Specific Heat Casing Turbine (J/kg·K)"]
+    end
 
-   compose(ODESystem(eqs, t, vars, para;name), inport, outport)
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        OutPowPort = PowerPort()
+        OutMdotPort = MassFlowPort()
+        shaftin = Shaft()
+    end
+
+    @variables begin
+        T4(t) = 650,  [description="Turbine Outlet Temperature (K)"]
+        Nred_t(t),    [description="Reduced speed turbine"]
+        ṁ_turb(t),    [description="Turbine mass flow from map"]
+        eff_t(t),     [description="Turbine efficiency from map"]
+		κg(t) 
+		γ_g(t)
+    end
+
+    @equations begin
+		κg ~ cp(InTempPort.T) / cv(InTempPort.T)
+        γ_g ~ (κg - 1) / κg
+        Nred_t ~ (60/(2π)) * (shaftin.ω / sqrt(InTempPort.T))
+        ṁ_turb ~ turbine_m(Nred_t, π_t)
+        eff_t ~ turbine_η(Nred_t, π_t)
+        OutMdotPort.mdot ~ ṁ_turb * (InPresPort.p/sqrt(InTempPort.T))
+        OutPresPort.p ~ InPresPort.p / π_t
+        OutTempPort.T ~ InTempPort.T * (1 - eff_t*(1 - π_t^(-γ_g)))
+        D(T4) ~ (1 / (m_cas_turb*c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T4))
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h(InPresPort.p, InTempPort.T) - h(OutPresPort.p, OutTempPort.T))
+    end
 end
 
-# ╔═╡ c34dbbdb-bd7b-4cea-a4ef-dc83fb813a12
-function RotationalSystem(;name)
-	@named InPowPortFromComp = PowerPort()
-	@named InPowPortFromTurb = PowerPort()
-	@named OutPowPort = PowerPort()
-    @named outshaft = Shaft()
-	@named Pload = RealInput()
-	
-	para = @parameters begin
-        I =  8.3e-3, 			[description = "Inertia (kg.m^2)"]
-		Pload(t) = 70000
-        P_lb = 21.33e-3 * (outshaft.ω * (60/(2*pi))),			[description = "Power Bearing Losses (W)"]
-        P_le = -5.0802e-3 * (Pload/1000)^3 + 2.3891 * (Pload/1000)^2 − 2.3492e2 * (Pload/1000) + 8.3781e3            , 			[description = "Power Electrical Losses (W)"]
-	end
-	
-	vars = @variables begin
-		ω(t)
-	end
-	
-	eqs = [ D(ω) ~ (1 / (I * ω)) * (OutPowPort.P/1000)
-			OutPowPort.P ~ (InPowPortFromTurb.P-InPowPortFromComp.P) - Pload - P_lb - P_le
-			outshaft.ω ~ ω]	
-   compose(ODESystem(eqs, t, vars, para;name), InPowPortFromComp, InPowPortFromTurb, OutPowPort, outshaft)
+# ╔═╡ e1737a98-77de-4f0e-9b17-cb0b63de7b15
+@mtkmodel ControlTurbine begin
+    @parameters begin
+        π_t = 3.8585,        [description="Pressure ratio"]
+        m_cas_turb = 122.2,  [description="Turbine casing mass (kg)"]
+        c_casing = 500,      [description="Specific Heat Casing Turbine (J/kg·K)"]
+    end
+
+    @components begin
+        InPresPort = PressurePort()
+        InTempPort = TemperaturePort()
+        OutPresPort = PressurePort()
+        OutTempPort = TemperaturePort()
+        OutPowPort = PowerPort()
+        OutMdotPort = MassFlowPort()
+        shaftin = Shaft()
+    end
+
+    @variables begin
+        T4(t) = 650,       [description="Turbine Outlet Temperature (K)"]
+        Nred_t(t),    [description="Reduced speed turbine"]
+        ṁ_turb(t),    [description="Turbine mass flow from map"]
+        eff_t(t),     [description="Turbine efficiency from map"]
+		κg(t) 
+		γ_g(t)
+    end
+
+    @equations begin
+		κg ~ cp(InTempPort.T) / cv(InTempPort.T)
+        γ_g ~ (κg - 1) / κg
+        Nred_t ~ (60/(2π)) * (shaftin.ω / sqrt(InTempPort.T))
+        ṁ_turb ~ turbine_m(Nred_t, π_t)
+        eff_t ~ turbine_η(Nred_t, π_t)
+        OutMdotPort.mdot ~ ṁ_turb * (InPresPort.p/sqrt(InTempPort.T))
+        OutPresPort.p ~ InPresPort.p / π_t
+        OutTempPort.T ~ InTempPort.T * (1 - eff_t*(1 - π_t^(-γ_g)))
+        D(T4) ~ (1 / (m_cas_turb*c_casing)) * (OutMdotPort.mdot) * (h(OutPresPort.p, OutTempPort.T) - h(OutPresPort.p, T4))
+        OutPowPort.P ~ (OutMdotPort.mdot) * (h(InPresPort.p, InTempPort.T) - h(OutPresPort.p, OutTempPort.T))
+    end
 end
 
-# ╔═╡ 49a77da0-f257-4cb8-aa73-1849a21f97be
-start_T = 300
+# ╔═╡ b38fa1c0-c6ae-4ddb-9d99-0d580a355895
+@mtkmodel SteadyStateShaft begin
+    @parameters begin
+    	I = 8.3e-3, [description="Moment of inertia (kg·m²)"]
+		Pload = 100000, [description="Load power"]
+    end
 
-# ╔═╡ 8fc05447-78c4-40fa-9989-1a7db8e5d2da
-start_p = 101325
+    @components begin
+        InPowPortFromComp = PowerPort()
+        InPowPortFromTurb = PowerPort()
+        OutPowPort = PowerPort()
+        outshaft = Shaft()
+    end
 
-# ╔═╡ bf27a03b-d419-41d0-bccf-5b50a556b2ae
-@named sourcetemp = SourceTemperature(source_temperature = start_T)
+    @variables begin
+        ω(t) = 7333, [description="Angular velocity"]
+		P_lb(t)
+		P_le(t)
+    end
 
-# ╔═╡ 8eec0d23-6036-4b4d-98bc-d384cffb37c1
-@named sourcepres = SourcePressure(source_pressure = start_p)
+    @equations begin
+		P_lb ~ 21.33e-3 * (outshaft.ω * (60/(2*pi)))
+        P_le ~ 3473 + 0.0812*(InPowPortFromTurb.P-InPowPortFromComp.P) +
+              2.67e-7 * (InPowPortFromTurb.P-InPowPortFromComp.P)^2 -
+              4.48e-12 * (InPowPortFromTurb.P-InPowPortFromComp.P)^3
+		D(ω) ~ (1 / (I * ω)) * (OutPowPort.P / 1000)
+		OutPowPort.P ~ (InPowPortFromTurb.P - InPowPortFromComp.P) - Pload - P_lb - P_le
+		outshaft.ω ~ ω
+    end
+end
 
-# ╔═╡ ae90d075-dc5e-47d9-ab22-c7b7307937f9
-@named compressor = Compressor()
+# ╔═╡ 5516ebd8-ca0b-4905-b3db-10c6131feb3a
+@mtkmodel ControlShaft begin
+    @parameters begin
+    	I = 8.3e-3, [description="Moment of inertia (kg·m²)"]
+    end
 
-# ╔═╡ b8c60c84-2021-4b0f-943e-32a993000afc
-@named recuperator = Recuperator()
+    @components begin
+        InPowPortFromComp = PowerPort()
+        InPowPortFromTurb = PowerPort()
+        OutPowPort = PowerPort()
+        outshaft = Shaft()
+		powerload = PowerPort()
+        Pload = RealInput()
+		ω = RealOutput()
+    end
 
-# ╔═╡ be1fd56d-68af-48c8-b96b-4e2259b64baa
-@named combustionchamber = CombustionChamber()
+    @variables begin
+        xω(t) = 7333, [description="Angular velocity"]
+		P_lb(t)
+		P_le(t)
+		xPload(t)
+    end
 
-# ╔═╡ 15b188e0-4c3a-48f7-a3e4-4f615b1f0afe
-@named turbine = Turbine()
+    @equations begin
+		P_lb ~ 21.33e-3 * (outshaft.ω * (60/(2*pi)))
+        P_le ~ 3473 + 0.0812*(InPowPortFromTurb.P-InPowPortFromComp.P) +
+              2.67e-7 * (InPowPortFromTurb.P-InPowPortFromComp.P)^2 -
+              4.48e-12 * (InPowPortFromTurb.P-InPowPortFromComp.P)^3
+		D(xω) ~ (1 / (I * xω)) * (OutPowPort.P / 1000)
+		OutPowPort.P ~ (InPowPortFromTurb.P - InPowPortFromComp.P) - xPload - P_lb - P_le
+		outshaft.ω ~ xω
 
-# ╔═╡ 0fa65b73-b35f-4f39-990a-3f837ddfede2
-@named shaft = RotationalSystem()
+		powerload.P ~ xPload
+        xPload ~ Pload.u
+		xω ~ ω.u
+    end
+end
 
-# ╔═╡ d90569cf-764a-468b-b3a1-7536fef43f59
-@named wasteheat = WasteHeat()
+# ╔═╡ b7e2a1e4-6bc8-41b6-bb0a-4578eab7492a
+@mtkmodel ControlShaftForTITControl begin
+    @parameters begin
+    	I = 8.3e-3, [description="Moment of inertia (kg·m²)"]
+		xPload(t) = 100000
+    end
 
-# ╔═╡ 7428ccb3-ea6f-4a04-ae41-7012aba02431
-@named CWM = CompressorWithMap()
+    @components begin
+        InPowPortFromComp = PowerPort()
+        InPowPortFromTurb = PowerPort()
+        OutPowPort = PowerPort()
+        outshaft = Shaft()
+		powerload = PowerPort()
+        Pload = RealInput()
+		ω = RealOutput()
+    end
 
-# ╔═╡ 0fda9b53-a3ec-4deb-bf3f-d57686c41346
-@named TWM = TurbineWithMap()
+    @variables begin
+        xω(t) = 6000, [description="Angular velocity"]
+		P_lb(t)
+		P_le(t)
+    end
 
-# ╔═╡ cca5c862-f17d-4b2f-b40f-4ea62d908825
-function MicroGasTurbineFIX(;name = :MicroGasTurbineFIX)
-	@named sourceT = SourceTemperature(source_temperature = start_T)
-	@named sourcep = SourcePressure(source_pressure = start_p)
-	@named compressor = CompressorWithMap()
-	@named turbine = TurbineWithMap()
-	@named recuperator = Recuperator()
-	@named combustionchamber = CombustionChamber()
-	@named shaft = RotationalSystem()
-	@named wasteheat = WasteHeat()
-	
-	eqs = [ # To Compressor
-			connect(sourceT.TempPort,compressor.InTempPort)
-			connect(sourcep.PresPort,compressor.InPresPort)
-			connect(recuperator.OutPresPort_cold,compressor.InPresPortFromRec)
-			connect(shaft.outshaft, compressor.shaftin)
+    @equations begin
+		P_lb ~ 21.33e-3 * (outshaft.ω * (60/(2*pi)))
+        P_le ~ 3473 + 0.0812*(InPowPortFromTurb.P-InPowPortFromComp.P) +
+              2.67e-7 * (InPowPortFromTurb.P-InPowPortFromComp.P)^2 -
+              4.48e-12 * (InPowPortFromTurb.P-InPowPortFromComp.P)^3
+		D(xω) ~ (1 / (I * xω)) * (OutPowPort.P / 1000)
+		OutPowPort.P ~ (InPowPortFromTurb.P - InPowPortFromComp.P) - xPload - P_lb - P_le
+		outshaft.ω ~ xω
 
-			#To Recuperator
-			connect(compressor.OutTempPort,recuperator.InTempPort_cold)
-			connect(compressor.OutMdotPort,recuperator.InMdotPort_cold)
-			connect(sourcep.PresPort,recuperator.InPresPort_hot)
-			connect(turbine.OutMdotPort,recuperator.InMdotPort_hot)
-			connect(turbine.OutTempPort,recuperator.InTempPort_hot)
-			connect(combustionchamber.OutPresPort2,recuperator.InPresPort_cold)
+		powerload.P ~ xPload
+        xPload ~ Pload.u
+		xω ~ ω.u
+    end
+end
 
-			#To Combustion Chamber
-			connect(compressor.OutPresPort, combustionchamber.InPresPort)
-			connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
-			connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
-			connect(recuperator.OutTempPort_cold,combustionchamber.InTempPort)
+# ╔═╡ 4303de6e-7c17-4406-985d-8992341cd859
+md"""# Sensors"""
 
-			#To Turbine
-			connect(combustionchamber.OutTempPort,turbine.InTempPort)
-			connect(combustionchamber.OutPresPort,turbine.InPresPortFromCC)
-			connect(recuperator.OutPresPort_hot,turbine.InPresPortFromRec)
-			connect(shaft.outshaft, turbine.shaftin) 
+# ╔═╡ aa1989b2-8b6e-4f8c-8c90-035e56c4ce67
+@mtkmodel SpeedSensor begin
+    @components begin
+        port = Shaft()
+        ω = RealOutput()
+    end
+    @equations begin
+        ω.u ~ port.ω
+    end
+end
+
+# ╔═╡ f9fe72c8-5419-4b6e-bd94-e3cd94d8fa9b
+@mtkmodel PowerSensor begin
+    @components begin
+        port = PowerPort()
+        Pload = RealOutput()
+    end
+    @equations begin
+        Pload.u ~ port.P
+    end
+end
+
+# ╔═╡ b2019e1f-d197-4959-bdfe-1bbd358b6933
+@mtkmodel TOTSensor begin
+    @components begin
+        port = TemperaturePort()
+        TOT = RealOutput()
+    end
+    @equations begin
+        TOT.u ~ port.T
+    end
+end
+
+# ╔═╡ 23fbbf84-a884-4f21-9b99-bc8a9cb359c7
+md"""# Integration Into Systems"""
+
+# ╔═╡ c9d89823-68d5-427b-a477-6ff5c67e720a
+md"""### New MGT System"""
+
+# ╔═╡ 578cfa59-33d0-4f89-9909-7c3c4bcdb060
+@mtkmodel SteadyStateMicroGasTurbine begin
+    @components begin
+        sourceT = SourceTemperature(source_temperature = 288.15)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = SteadyStateCompressor()
+        turbine = SteadyStateTurbine()
+        recuperator = SteadyStateRecuperator()
+        combustionchamber = SteadyStateCombustionChamber()
+        shaft = SteadyStateShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+    end
+
+    @equations begin
+        # To Compressor
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # To Recuperator
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # To Combustion Chamber
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # To Turbine
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # To Shaft
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+    end
+end
+
+# ╔═╡ 4991e356-8b07-4221-940c-17bcbe38107e
+md"""### MGT-Hydrogen System"""
+
+# ╔═╡ 41b8f15f-f4f4-402f-ac07-8570fe5fb153
+@mtkmodel SteadyStateMicroGasTurbineHydrogen begin
+    @components begin
+        sourceT = SourceTemperature(source_temperature = 288)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = SteadyStateCompressor()
+        turbine = SteadyStateTurbine()
+        recuperator = SteadyStateRecuperator()
+        combustionchamber = SteadyStateCombustionChamberHydrogen()
+        shaft = SteadyStateShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+    end
+
+    @equations begin
+        # To Compressor
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # To Recuperator
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # To Combustion Chamber (Hydrogen)
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # To Turbine
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # To Shaft
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+    end
+end
+
+# ╔═╡ 5efb8419-d98a-4b3c-992f-fd479eb11012
+md"""### Closed Loop MGT System"""
+
+# ╔═╡ e7e53922-b324-4ee3-a100-f59cf75e0ff4
+@mtkmodel PlantForController begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 288.15)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+    end
+
+    @equations begin
+        # To Compressor
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # To Recuperator
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # To Combustion Chamber
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # To Turbine
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # To Shaft
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+		
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+    end
+end
+
+# ╔═╡ 8fec2d77-efb4-46ec-817a-9744a58759d4
+@mtkmodel MergedMGT begin
+    @components begin
+		# Plant
+        mgt = PlantForController()
+		
+        # Controller Components
+        pid_speed = ModelingToolkitStandardLibrary.Blocks.LimPID(k = 400, Ti = 0.5, Td = 1, u_max=350)
+        pid_TOT = ModelingToolkitStandardLibrary.Blocks.LimPID(k = 400, Ti = 0.5, Td = 1, u_max=350)
+
+        # Signals and Sensors
+        power_demand = ModelingToolkitStandardLibrary.Blocks.Constant(k=100000)
+		TOT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=923)
+
+        # Custom Blocks
+        LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
+
+        # Feedback
+        feedbackspeed = ModelingToolkitStandardLibrary.Blocks.Feedback()
+        feedbackTOT = ModelingToolkitStandardLibrary.Blocks.Feedback()
+    end
+
+    @equations begin
+        # Power Control Loop
+        connect(power_demand.output, LUT_Pdem_to_RefSpeed.input)
+        connect(LUT_Pdem_to_RefSpeed.output, feedbackspeed.input1)
+        connect(mgt.shaft.ω, feedbackspeed.input2)
+        connect(feedbackspeed.output, pid_speed.err_input)
+        connect(pid_speed.ctr_output, mgt.shaft.Pload)
+
+        # Fuel Control Loop
+        connect(TOT_ref.output, feedbackTOT.input1)
+        connect(mgt.turbine.T4, feedbackTOT.input2)
+        connect(feedbackTOT.output, pid_TOT.err_input)
+        connect(pid_TOT.ctr_output, mgt.combustionchamber.ṁ_fuel)
+    end
+end
+
+# ╔═╡ 78c34865-3496-47b1-94bd-966c292d0322
+@mtkmodel ControlledMicroGasTurbineOnlyTIT begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 288)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaftForTITControl()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+
+        # Controller Components
+		pid_TIT = ModelingToolkitStandardLibrary.Blocks.LimPID(k = 5, Ti = 0.2, Td = 0.2, u_max=Inf)
+		TIT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=1223)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+		
+        # Fuel Control Loop
+        connect(TIT_ref.output, pid_TIT.reference)
+        connect(combustionchamber.T3, pid_TIT.measurement)
+        connect(pid_TIT.ctr_output, combustionchamber.ṁ_fuel)
+    end
+end
+
+# ╔═╡ 9fce2cb3-d33b-4e8d-81b4-0a28d559c3da
+@mtkmodel ControlledMicroGasTurbineOnlyPower begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 288)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamberForPowerControl()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+        # Sensors
+        totsensor = TOTSensor()
+        powersensor = PowerSensor()
+        speedsensor = SpeedSensor()
+
+        # Power Demand Control
+		power_demand = ModelingToolkitStandardLibrary.Blocks.Ramp(height = -10000, duration = 500, offset = 100000.0, start_time = 5000, smooth = true)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+        # Sensor Connections
+        connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+        connect(shaft.powerload, powersensor.port)
+
+        # Power control (open loop)
+        connect(power_demand.output, shaft.Pload)
+    end
+end
+
+# ╔═╡ 0617c4be-e83e-4d55-a8f3-83f61c121758
+@mtkmodel ControlledMicroGasTurbine begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 300)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+
+        # Controller Components
+		pid_TIT = PID(k=0.1, Ti=0.2, Td=0.0, Nd=10, int__x=5, der__x=0.5)
+		pid_speed = PID(k=0.1, Ti=0.2, Td=0.05, Nd=10, int__x=5, der__x=0.5)
+		LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
+
+		# Feedback 
+		speed_feedback = Feedback()
+		TIT_feedback = Feedback()
 			
-			#To Shaft
-			connect(compressor.OutPowPort,shaft.InPowPortFromComp)
-			connect(turbine.OutPowPort,shaft.InPowPortFromTurb)
-			
-			#Heat Waste
-			connect(recuperator.OutTempPort_hot, wasteheat.TempPort)]
-		
-   	return compose(ODESystem(eqs, t, systems = [sourceT, sourcep, compressor,combustionchamber,recuperator,turbine, shaft, wasteheat], name = name))
-	
+        # Signals and Sensors
+		power_demand = ModelingToolkitStandardLibrary.Blocks.Step(height = -10000, offset = 100000.0, start_time = 500)
+		TIT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=1223)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+
+        # Power Control Loop
+		connect(power_demand.output, LUT_Pdem_to_RefSpeed.input)
+		connect(LUT_Pdem_to_RefSpeed.output, speed_feedback.input1)
+		connect(shaft.ω, speed_feedback.input2)
+		connect(speed_feedback.output, pid_TIT.err_input)
+		connect(pid_speed.ctr_output, shaft.Pload)
+
+        # Fuel Control Loop
+        connect(TIT_ref.output, TIT_feedback.input1)
+        connect(combustionchamber.T3, TIT_feedback.input2)
+		connect(TIT_feedback.output, pid_TIT.err_input)
+        connect(pid_TIT.ctr_output, combustionchamber.ṁ_fuel)
+    end
 end
 
-# ╔═╡ 34cf9e0c-ea39-4d38-9ec8-b4c38a486cad
-@named mgt = MicroGasTurbineFIX()
+# ╔═╡ 892cbfaf-a36f-4cc2-9fb7-234ec0d3868a
+@mtkmodel ControlledMicroGasTurbineWithLimPID begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 300)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
 
-# ╔═╡ 0aa86481-1c87-4729-9823-778ce8b062b5
-ssys = structural_simplify(mgt)
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
 
-# ╔═╡ 35eb6e17-4cea-45de-b2c5-846983793601
-u0 = [compressor.T2 => 300, combustionchamber.ρ3 => 15,combustionchamber.T3 => 300, combustionchamber.TIT => 300, recuperator.T_w[1] => 157, recuperator.T_w[2] => 403.5, recuperator.T_w[3] => 650, turbine.T4 => 300, shaft.ω => 5850]
-
-# ╔═╡ 2e1ce1ef-24f4-4581-b6dc-b98df795f5d3
-tspan = (0.0, 1000.0)
-
-# ╔═╡ a4876ad9-b931-4eb8-beeb-a5132489d87d
-prob = ODEProblem(ssys, u0, tspan)
-
-# ╔═╡ 1a0ef76a-a734-4150-8740-6beac6264806
-sol = solve(prob, saveat = 1.0)
-
-# ╔═╡ e116de95-6f54-43a2-bfd8-d2db7433ea70
-plot(sol, layout = 9)
-
-# ╔═╡ 89ca6c60-6dd3-4652-83c9-d81892a5f065
-println("Combustor Inlet Pressure: ",sol[combustionchamber.InPresPort.p][end], " Pa")
-
-# ╔═╡ 1466e67a-39ec-4997-8193-2948822bf404
-println("Temperature (C): ", sol[turbine.T4][end] - 273)
-
-# ╔═╡ 48bff90f-da0e-4d1a-a28c-5c61fa073cf9
-println("Power (kW): ", sol[shaft.OutPowPort.P][end] / 1000)
-
-# ╔═╡ e46ce2f8-398d-4171-9076-bc8d5bc0e121
-println("Shaft Rotation Speed (RPM): ", sol[shaft.outshaft.ω][end] * (60/(2*pi)))
-
-# ╔═╡ 60563d50-d507-45b7-930d-3b3ff715eebc
-function MicroGasTurbineFTCM(;name = :MicroGasTurbine)
-	@named source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
-	@named compressor = CompressorWithMap()
-	@named recuperator = Recuperator()
-	@named combustionchamber = CombustionChamber()
-	@named turbine = TurbineWithMap()
-	@named shaft = RotationalSystem()
-	@named sink = Sink()
-	
-	eqs = [ connect(source.port,compressor.inport)
-			connect(compressor.outport, recuperator.inport_cold)
-			connect(recuperator.outport_cold, combustionchamber.inport)
-			connect(combustionchamber.outport, turbine.inport)
-			connect(turbine.outport, shaft.inport)
-			connect(turbine.outport, recuperator.inport_hot)
-			connect(recuperator.outport_hot, sink.port)
-	
-			connect(shaft.outshaft, compressor.shaftin)
-			connect(shaft.outshaft, turbine.shaftin) ]
+        # Controller Components
+		# TIT controller (fuel flow)
+		pid_TIT = LimPID(k=0.1, Ti=0.2, Td=0.0, u_max=0.05)
+		# Speed controller
+		pid_speed = LimPID(k=0.1, Ti=0.2, Td=0.05, u_max=100000.0, u_min=0.0)
+		LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
 		
-   	return compose(ODESystem(eqs, t, systems = [source,compressor,combustionchamber,recuperator,turbine, shaft, sink], name = name))
-	
+        # Signals and Sensors
+		power_demand = ModelingToolkitStandardLibrary.Blocks.Step(height = -10000, offset = 100000.0, start_time = 500)
+		TIT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=1223)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+
+        # Power Control Loop
+		connect(power_demand.output, LUT_Pdem_to_RefSpeed.input)
+		connect(LUT_Pdem_to_RefSpeed.output, pid_speed.reference)
+		connect(shaft.ω, pid_speed.measurement)
+		connect(pid_speed.ctr_output, shaft.Pload)
+
+        # Fuel Control Loop
+        connect(TIT_ref.output, pid_TIT.reference)
+        connect(combustionchamber.T3, pid_TIT.measurement)
+        connect(pid_TIT.ctr_output, combustionchamber.ṁ_fuel)
+    end
 end
 
-# ╔═╡ cac61228-aded-45ac-908f-19958d9dbba3
-function MicroGasTurbineNoCompressorMap(;name = :MicroGasTurbineNoCompressorMap)
-	@named source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
-	@named compressor = Compressor()
-	@named recuperator = Recuperator()
-	@named combustionchamber = CombustionChamber()
-	@named turbine = Turbine()
-	@named shaft = RotationalSystem()
-	@named sink = Sink()
-	
-	eqs = [ connect(source.port,compressor.inport)
-			connect(compressor.outport, recuperator.inport_cold)
-			connect(recuperator.outport_cold, combustionchamber.inport)
-			connect(combustionchamber.outport, turbine.inport)
-			connect(turbine.outport, shaft.inport)
-			connect(turbine.outport, recuperator.inport_hot)
-			connect(recuperator.outport_hot, sink.port)]			
-		
-   	return compose(ODESystem(eqs, t, systems = [source,compressor,combustionchamber,recuperator,turbine, shaft, sink], name = name))
-	
+# ╔═╡ 8f71695b-2ffe-4941-98a4-045c6ff1aaf0
+@mtkmodel ControlledMicroGasTurbineLengkap begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 300)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+
+        # Controller Components
+		# TIT controller (fuel flow)
+		pid_TIT = LimPID(k=1.0, Ti=0.2, Td=0.01, u_max=0.05)
+		# Speed controller
+		pid_speed = LimPID(k=2.0, Ti=0.2, Td=0.01, Ni=5, u_max=200.0, u_min=0.0)
+		# Power controller
+		pid_power = LimPID(k=0.5, Ti=0.3, Td=0.01, Ni=10, u_max=50.0, u_min=0.0)
+
+		LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
+		add = Add()
+
+        # Signals and Sensors
+        power_demand = ModelingToolkitStandardLibrary.Blocks.Constant(k=100000)
+		TIT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=1223)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+
+        # Power Control Loop
+		connect(power_demand.output, LUT_Pdem_to_RefSpeed.input)
+		connect(LUT_Pdem_to_RefSpeed.output, add.input1)
+        connect(power_demand.output, pid_power.reference)
+        connect(powersensor.Pload, pid_power.measurement)
+        connect(pid_power.ctr_output, add.input2)
+		connect(add.output, pid_speed.reference)
+		connect(shaft.ω, pid_speed.measurement)
+		connect(pid_speed.ctr_output, shaft.Pload)
+
+        # Fuel Control Loop
+        connect(TIT_ref.output, pid_TIT.reference)
+        connect(combustionchamber.T3, pid_TIT.measurement)
+        connect(pid_TIT.ctr_output, combustionchamber.ṁ_fuel)
+    end
 end
 
-# ╔═╡ cadc066d-a336-413c-8d8e-3eda5dc95a3b
-@mtkmodel MicroGasTurbineWithController begin
-	@components begin
-		ref = Constant(k=923)
-		pi_controller = Blocks.LimPI(k = 1.1, T = 0.035, u_max = 10, Ta = 0.035)
-		feedback = Blocks.Feedback()
-		source = Source(source_temperature = start_T, source_pressure = start_p, source_mdot = mdot, source_power = start_P)
-		compressor = Compressor()
-		recuperator = Recuperator()
-		combustionchamber = CombustionChamber()
-		turbine = Turbine()
-		shaft = RotationalSystem()
-		sink = Sink()
-		temperature_sensor = TemperatureSensor()
-		speed_sensor = SpeedSensor()
-	end
-	
-	@equations begin
-		#MGT Connections
-		connect(source.port,compressor.inport)
-		connect(compressor.outport, recuperator.inport_cold)
-		connect(recuperator.outport_cold, combustionchamber.inport)
-		connect(combustionchamber.outport, turbine.inport)
-		connect(turbine.outport, shaft.inport)
-		connect(turbine.outport, recuperator.inport_hot)
-		connect(recuperator.outport_hot, sink.port)
+# ╔═╡ 46cf0238-17fc-4f5c-9225-c25a2efeb40b
+@mtkmodel ControlledHydrogenMicroGasTurbine begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 300)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamberHydrogen()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
 
-		#Control System
-		connect(ref.output, feedback.input1)
-		connect(turbine.TOTSensor, feedback.input2)
-		connect(feedback.output, pi_controller.err_input)
-		pi_controller.ctr_output ~ combustionchamber.ṁ_fuel
-	end
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+
+        # Controller Components
+		pid_TIT = LimPID(k=2.0, Ti=0.5, Td=0.1, Ni=5, u_max=0.3, u_min=0.0, wp=1.0, wd=0.0)
+		pid_speed = LimPID(k=1.5, Ti=0.5, Td=0.05, Ni=5, u_max=20.0, u_min=0.0, wp=1.0, wd=0.0)
+		pid_power = LimPID(k=1.0, Ti=2.0, Td=false, Ni=Inf, u_max=50.0, u_min=0.0, wp=1.0, wd=0.0)
+
+		LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
+		add = Add()
+
+        # Signals and Sensors
+        power_demand = ModelingToolkitStandardLibrary.Blocks.Constant(k=100000)
+		TIT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=1223)
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+
+        # Power Control Loop
+		connect(power_demand.output, LUT_Pdem_to_RefSpeed.input)
+		connect(LUT_Pdem_to_RefSpeed.output, add.input1)
+        connect(power_demand.output, pid_power.reference)
+        connect(powersensor.Pload, pid_power.measurement)
+        connect(pid_power.ctr_output, add.input2)
+		connect(add.output, pid_speed.reference)
+		connect(shaft.ω, pid_speed.measurement)
+		connect(pid_speed.ctr_output, shaft.Pload)
+
+        # Fuel Control Loop
+        connect(TIT_ref.output, pid_TIT.reference)
+        connect(combustionchamber.T3, pid_TIT.measurement)
+        connect(pid_TIT.ctr_output, combustionchamber.ṁ_fuel)
+    end
+end
+
+# ╔═╡ 80495b38-e463-4812-b663-c4b393032a3e
+@mtkmodel BackupControlledMicroGasTurbine begin
+    @components begin
+        # Plant Components
+        sourceT = SourceTemperature(source_temperature = 300)
+        sourcep = SourcePressure(source_pressure = 101320)
+        compressor = ControlCompressor()
+        turbine = ControlTurbine()
+        recuperator = ControlRecuperator()
+        combustionchamber = ControlCombustionChamber()
+        shaft = ControlShaft()
+        wasteheat = WasteHeat()
+        ambientoutpressure = AmbientOutPressure()
+
+		# Sensors
+		totsensor = TOTSensor()
+		powersensor = PowerSensor()
+		speedsensor = SpeedSensor()
+
+        # Controller Components
+        pid_power = ModelingToolkitStandardLibrary.Blocks.PID(k=400, Ti=0.5, Td=1, Nd=10, int__x=0, der__x=0)
+        pid_speed = ModelingToolkitStandardLibrary.Blocks.PID(k=300, Ti=0.3, Td=0.5, Nd=10, int__x=0, der__x=0)
+        pid_TOT = ModelingToolkitStandardLibrary.Blocks.PID(k=200, Ti=1.0, Td=0.1, Nd=10, int__x=0, der__x=0)
+
+        # Signals and Sensors
+        power_demand = ModelingToolkitStandardLibrary.Blocks.Constant(k=100000)
+		TOT_ref = ModelingToolkitStandardLibrary.Blocks.Constant(k=923)
+
+        # Custom Blocks
+        power_limiter = ModelingToolkitStandardLibrary.Blocks.Limiter(y_max=100000, y_min=70000)
+        integrator_TOT = ModelingToolkitStandardLibrary.Blocks.Integrator(k=1, x=0.0)
+        LUT_Pdem_to_RefSpeed = functionBlock_LUT_Pdem()
+        LUT_Speed_to_RefFuel = functionBlock_LUT_Fuel()
+		LUT_TOT_to_RefFuel =  functionBlock_LUT_TOT()
+
+        # Adders
+        sum_power = ModelingToolkitStandardLibrary.Blocks.Add(k1=1.0, k2=1.0)
+		sum_comp_fuel = ModelingToolkitStandardLibrary.Blocks.Add(k1=1.0, k2=1.0)
+        sum_fuel1 = ModelingToolkitStandardLibrary.Blocks.Add(k1=1.0, k2=1.0)
+        sum_fuel2 = ModelingToolkitStandardLibrary.Blocks.Add(k1=1.0, k2=1.0)
+
+        # Feedback
+        feedbackpower = ModelingToolkitStandardLibrary.Blocks.Feedback()
+        feedbackspeed = ModelingToolkitStandardLibrary.Blocks.Feedback()
+        feedbackTOT = ModelingToolkitStandardLibrary.Blocks.Feedback()
+    end
+
+    @equations begin
+        # Plant Connections
+        connect(sourceT.TempPort, compressor.InTempPort)
+        connect(sourcep.PresPort, compressor.InPresPort)
+        connect(shaft.outshaft, compressor.shaftin)
+
+        # Recuperator Connections
+        connect(compressor.OutPresPort, recuperator.InPresPort_cold)
+        connect(compressor.OutTempPort, recuperator.InTempPort_cold)
+        connect(compressor.OutMdotPort, recuperator.InMdotPort_cold)
+        connect(turbine.OutPresPort, recuperator.InPresPort_hot)
+        connect(turbine.OutMdotPort, recuperator.InMdotPort_hot)
+        connect(turbine.OutTempPort, recuperator.InTempPort_hot)
+
+        # Combustion Chamber Connections
+        connect(recuperator.OutPresPort_cold, combustionchamber.InPresPort)
+        connect(recuperator.OutTempPort_cold, combustionchamber.InTempPort)
+        connect(compressor.OutMdotPort, combustionchamber.InMdotPortFromCompressor)
+        connect(turbine.OutMdotPort, combustionchamber.InMdotPortFromTurbine)
+
+        # Turbine Connections
+        connect(combustionchamber.OutTempPort, turbine.InTempPort)
+        connect(combustionchamber.OutPresPort, turbine.InPresPort)
+        connect(shaft.outshaft, turbine.shaftin)
+
+        # Shaft Connections
+        connect(compressor.OutPowPort, shaft.InPowPortFromComp)
+        connect(turbine.OutPowPort, shaft.InPowPortFromTurb)
+
+        # Heat Waste Connections
+        connect(recuperator.OutTempPort_hot, wasteheat.TempPort)
+        connect(recuperator.OutPresPort_hot, ambientoutpressure.PresPort)
+
+		# To Sensors
+		connect(turbine.OutTempPort, totsensor.port)
+        connect(shaft.outshaft, speedsensor.port)
+		connect(shaft.powerload, powersensor.port)
+
+        # Power Control Loop
+        connect(power_demand.output, power_limiter.input)
+        connect(power_limiter.output, LUT_Pdem_to_RefSpeed.input)
+        connect(power_limiter.output, feedbackpower.input1)
+        connect(powersensor.Pload, feedbackpower.input2)
+        connect(feedbackpower.output, pid_power.err_input)
+        connect(LUT_Pdem_to_RefSpeed.output, sum_power.input1)
+        connect(pid_power.ctr_output, sum_power.input2)
+        connect(sum_power.output, feedbackspeed.input1)
+        connect(shaft.ω, feedbackspeed.input2)
+        connect(feedbackspeed.output, pid_speed.err_input)
+        connect(pid_speed.ctr_output, shaft.Pload)
+
+        # Fuel Control Loop
+		connect(TOT_ref.output, LUT_TOT_to_RefFuel.input)
+        connect(TOT_ref.output, feedbackTOT.input1)
+        connect(turbine.T4, feedbackTOT.input2)
+        connect(feedbackTOT.output, pid_TOT.err_input)
+		connect(LUT_TOT_to_RefFuel.output, sum_comp_fuel.input1)
+        connect(pid_TOT.ctr_output, sum_comp_fuel.input2)
+		connect(sum_comp_fuel.output, integrator_TOT.input)
+        connect(shaft.ω, LUT_Speed_to_RefFuel.input)
+        connect(LUT_Speed_to_RefFuel.output, sum_fuel1.input1)
+        connect(pid_TOT.ctr_output, sum_fuel1.input2)
+        connect(sum_fuel1.output, sum_fuel2.input1)
+        connect(integrator_TOT.output, sum_fuel2.input2)
+        connect(sum_fuel2.output, combustionchamber.ṁ_fuel)
+    end
+end
+
+# ╔═╡ 2a095094-5f7a-4060-844d-cbc549ddfa38
+md"""# Solver"""
+
+# ╔═╡ 074e881d-fc4b-4d19-bbfa-0a61dac6b3e6
+let
+    @mtkbuild mgt = SteadyStateMicroGasTurbine()
+
+    # Initialization
+    u0 = [
+        mgt.recuperator.T_w[1] => 300.15,
+        mgt.recuperator.T_w[2] => 300.15,
+        mgt.recuperator.T_w[3] => 300.15,
+    ]
+
+    # Time Span
+    tspan = (0.0, 10000.0)
+
+    # Solve
+    prob = ODEProblem(mgt, u0, tspan)
+    sol = solve(prob)
+
+	# Result
+	T_Comp_out = sol[mgt.compressor.OutTempPort.T - 273.15][end]
+	T_Rec_Cold_out = sol[mgt.recuperator.OutTempPort_cold.T - 273.15][end]
+	T_CC_out = sol[mgt.combustionchamber.OutTempPort.T - 273.15][end]
+	T_turbine_out = sol[mgt.turbine.OutTempPort.T - 273.15][end]
+	T_amb_out = sol[mgt.wasteheat.TempPort.T - 273.15][end]
+    P_shaft_out = sol[mgt.shaft.OutPowPort.P / 1000][end]
+    omega_shaft = sol[mgt.shaft.ω * (60 / (2*pi))][end]
+
+	println("Compressor Outlet Temperature (C): ", T_Comp_out)
+    println("Recuperator Cold Side Outlet Temperature (C): ", T_Rec_Cold_out)
+	println("Combustor Outlet Temperature (C): ", T_CC_out)
+	println("Turbine Outlet Temperature (C): ", T_turbine_out)
+	println("Ambient Outlet Temperature (C): ", T_amb_out)
+    println("Shaft Output Power (kW): ", P_shaft_out)
+    println("Shaft Angular Velocity (RPM): ", omega_shaft)
+
+	P_amb = sol[mgt.sourcep.PresPort.p][end]
+	P_comp = sol[mgt.compressor.OutPresPort.p][end]
+	P_rec_cold = sol[mgt.recuperator.OutPresPort_cold.p][end]
+	P_cc = sol[mgt.combustionchamber.OutPresPort.p][end]
+	P_turb = sol[mgt.turbine.OutPresPort.p][end]
+	P_amb_out = sol[mgt.ambientoutpressure.PresPort.p][end]
+	
+	println("Ambient Pressure (Pa): ", P_amb)
+	println("Compressor Outlet Pressure (Pa): ", P_comp)
+	println("Recuperator Cold Side Outlet Pressure (Pa): ", P_rec_cold)
+	println("Combustion Chamber Outlet Pressure (Pa): ", P_cc)
+	println("Turbine Outlet Pressure (Pa): ", P_turb)
+	println("Ambient Outlet Pressure (Pa): ", P_amb_out)
+
+	mdot_comp = sol[mgt.compressor.OutMdotPort.mdot][end]
+	mdot_turb = sol[mgt.turbine.OutMdotPort.mdot][end]
+	isen_comp = sol[mgt.compressor.η_c_is][end]
+	isen_turb = sol[mgt.turbine.eff_t][end]
+	Nred_comp = sol[mgt.compressor.Nred][end]
+	Nred_turb = sol[mgt.turbine.Nred_t][end]
+
+	println("Mass Flow Compressor (kg/s): ", mdot_comp)
+	println("Mass Flow Turbine (kg/s): ", mdot_turb)
+	println("Compressor Isentropic Efficiency: ", isen_comp)
+	println("Turbine Isentropic Efficiency: ", isen_turb)
+	println("Compressor Shaft RPM: ", Nred_comp)
+	println("Turbine Shaft RPM: ", Nred_turb)
+
+	 # Plot
+    p1 = plot(sol, vars=[mgt.turbine.InTempPort.T - 273.15], label="TIT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+	p2 = plot(sol, vars=[mgt.turbine.OutTempPort.T - 273.15], label="TOT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+    p3 = plot(sol, vars=[mgt.shaft.OutPowPort.P / 1000], label="Shaft Output Power (kW)", xlabel="Time (s)", ylabel="Residual Power (kW)")
+    p4 = plot(sol, vars=[mgt.shaft.ω * (60 / (2*pi))], label="Shaft Speed (RPM)", xlabel="Time (s)", ylabel="Angular Velocity (RPM)")
+    plot(p1, p2, p3, p4, layout=(4,1), size=(800, 600))
+end
+
+# ╔═╡ 6af715d5-1876-4d9f-9271-743cf832ce80
+let
+    @mtkbuild mgt = SteadyStateMicroGasTurbineHydrogen()
+
+    # Initialization
+    u0 = [
+        mgt.recuperator.T_w[1] => 300.15,
+        mgt.recuperator.T_w[2] => 300.15,
+        mgt.recuperator.T_w[3] => 300.15,
+    ]
+
+    # Time Span
+    tspan = (0.0, 10000.0)
+
+    # Solve
+    prob = ODEProblem(mgt, u0, tspan)
+    sol = solve(prob)
+
+	# Result
+	T_Comp_out = sol[mgt.compressor.OutTempPort.T - 273.15][end]
+	T_Rec_Cold_out = sol[mgt.recuperator.OutTempPort_cold.T - 273.15][end]
+	T_CC_out = sol[mgt.combustionchamber.OutTempPort.T - 273.15][end]
+	T_turbine_out = sol[mgt.turbine.OutTempPort.T - 273.15][end]
+	T_amb_out = sol[mgt.wasteheat.TempPort.T - 273.15][end]
+    P_shaft_out = sol[mgt.shaft.OutPowPort.P / 1000][end]
+    omega_shaft = sol[mgt.shaft.ω * (60 / (2*pi))][end]
+
+	println("Compressor Outlet Temperature (C): ", T_Comp_out)
+    println("Recuperator Cold Side Outlet Temperature (C): ", T_Rec_Cold_out)
+	println("Combustor Outlet Temperature (C): ", T_CC_out)
+	println("Turbine Outlet Temperature (C): ", T_turbine_out)
+	println("Ambient Outlet Temperature (C): ", T_amb_out)
+    println("Shaft Output Power (kW): ", P_shaft_out)
+    println("Shaft Angular Velocity (RPM): ", omega_shaft)
+
+	P_amb = sol[mgt.sourcep.PresPort.p][end]
+	P_comp = sol[mgt.compressor.OutPresPort.p][end]
+	P_rec_cold = sol[mgt.recuperator.OutPresPort_cold.p][end]
+	P_cc = sol[mgt.combustionchamber.OutPresPort.p][end]
+	P_turb = sol[mgt.turbine.OutPresPort.p][end]
+	P_amb_out = sol[mgt.ambientoutpressure.PresPort.p][end]
+	
+	println("Ambient Pressure (Pa): ", P_amb)
+	println("Compressor Outlet Pressure (Pa): ", P_comp)
+	println("Recuperator Cold Side Outlet Pressure (Pa): ", P_rec_cold)
+	println("Combustion Chamber Outlet Pressure (Pa): ", P_cc)
+	println("Turbine Outlet Pressure (Pa): ", P_turb)
+	println("Ambient Outlet Pressure (Pa): ", P_amb_out)
+
+	mdot_comp = sol[mgt.compressor.OutMdotPort.mdot][end]
+	mdot_turb = sol[mgt.turbine.OutMdotPort.mdot][end]
+	isen_comp = sol[mgt.compressor.η_c_is][end]
+	isen_turb = sol[mgt.turbine.eff_t][end]
+	Nred_comp = sol[mgt.compressor.Nred][end]
+	Nred_turb = sol[mgt.turbine.Nred_t][end]
+
+	println("Mass Flow Compressor (kg/s): ", mdot_comp)
+	println("Mass Flow Turbine (kg/s): ", mdot_turb)
+	println("Compressor Isentropic Efficiency: ", isen_comp)
+	println("Turbine Isentropic Efficiency: ", isen_turb)
+	println("Compressor Shaft RPM: ", Nred_comp)
+	println("Turbine Shaft RPM: ", Nred_turb)
+
+	 # Plot
+    p1 = plot(sol, vars=[mgt.turbine.InTempPort.T - 273.15], label="TIT (K)", xlabel="Time (s)", ylabel="Temperature (C)")
+	p2 = plot(sol, vars=[mgt.turbine.OutTempPort.T - 273.15], label="TOT (K)", xlabel="Time (s)", ylabel="Temperature (C)")
+    p3 = plot(sol, vars=[mgt.shaft.OutPowPort.P / 1000], label="Shaft Output Power (kW)", xlabel="Time (s)", ylabel="Residual Power (kW)")
+    p4 = plot(sol, vars=[mgt.shaft.ω * (60 / (2*pi))], label="Shaft Speed (RPM)", xlabel="Time (s)", ylabel="Angular Velocity (RPM)")
+    plot(p1, p2, p3, p4, layout=(4,1), size=(800, 600))
+end
+
+# ╔═╡ 94abb64a-34ff-45d1-a6fd-62de3060a778
+let
+    @mtkbuild mgt = ControlledMicroGasTurbineOnlyTIT()
+
+    # Initialization
+    u0 = [
+        mgt.recuperator.T_w[1] => 300.15,
+        mgt.recuperator.T_w[2] => 300.15,
+        mgt.recuperator.T_w[3] => 300.15,
+    ]
+
+    # Time Span
+    tspan = (0.0, 1000)
+
+    # Solve
+    prob = ODEProblem(mgt, u0, tspan)
+    sol = solve(prob)
+
+	mff = sol[mgt.combustionchamber.xṁ_fuel][end]
+	
+	println("Mass Flow Fuel (kg/s): ", mff)
+	
+	 # Plot
+    p1 = plot(sol, vars=[mgt.combustionchamber.xT3 - 273.15], label="TIT (K)", xlabel="Time (s)", ylabel="Temperature (C)")
+	plot!(sol.t, sol[mgt.TIT_ref.output.u - 273.15], label = "Reference")
+	p2 = plot(sol, vars=[mgt.turbine.T4 - 273.15], label="TOT (K)", xlabel="Time (s)", ylabel="Temperature (C)")
+    p3 = plot(sol, vars=[mgt.shaft.OutPowPort.P / 1000], label="Shaft Output Power (kW)", xlabel="Time (s)", ylabel="Residual Power (kW)")
+    p4 = plot(sol, vars=[mgt.shaft.xω * (60 / (2*pi))], label="Shaft Speed (RPM)", xlabel="Time (s)", ylabel="Angular Velocity (RPM)")
+	p5 = plot(sol, vars=[mgt.combustionchamber.xṁ_fuel], label="Mass Flow Fuel", xlabel="Time (s)", ylabel="Mass Flow Fuel (kg/s)")
+    plot(p1, p2, p3, p4, p5, layout=(5,1), size=(800, 600))
+end
+
+# ╔═╡ 2eedaea6-b94f-4aed-983a-fe70b2812dbf
+let
+    @mtkbuild mgt = ControlledMicroGasTurbineOnlyPower()
+
+    # Initialization
+    u0 = [
+        mgt.recuperator.T_w[1] => 300.15,
+        mgt.recuperator.T_w[2] => 300.15,
+        mgt.recuperator.T_w[3] => 300.15,
+    ]
+
+    # Time Span
+    tspan = (0.0, 7500)
+
+    # Solve
+    prob = ODEProblem(mgt, u0, tspan)
+    sol = solve(prob)
+
+	# Result
+	T_Comp_out = sol[mgt.compressor.OutTempPort.T - 273.15][end]
+	T_Rec_Cold_out = sol[mgt.recuperator.OutTempPort_cold.T - 273.15][end]
+	T_CC_out = sol[mgt.combustionchamber.OutTempPort.T - 273.15][end]
+	T_turbine_out = sol[mgt.turbine.OutTempPort.T - 273.15][end]
+	T_amb_out = sol[mgt.wasteheat.TempPort.T - 273.15][end]
+    P_shaft_out = sol[mgt.shaft.OutPowPort.P / 1000][end]
+    omega_shaft = sol[mgt.shaft.xω * (60 / (2*pi))][end]
+
+	println("Compressor Outlet Temperature (C): ", T_Comp_out)
+    println("Recuperator Cold Side Outlet Temperature (C): ", T_Rec_Cold_out)
+	println("Combustor Outlet Temperature (C): ", T_CC_out)
+	println("Turbine Outlet Temperature (C): ", T_turbine_out)
+	println("Ambient Outlet Temperature (C): ", T_amb_out)
+    println("Shaft Output Power (kW): ", P_shaft_out)
+    println("Shaft Angular Velocity (RPM): ", omega_shaft)
+
+	P_amb = sol[mgt.sourcep.PresPort.p][end]
+	P_comp = sol[mgt.compressor.OutPresPort.p][end]
+	P_rec_cold = sol[mgt.recuperator.OutPresPort_cold.p][end]
+	P_cc = sol[mgt.combustionchamber.OutPresPort.p][end]
+	P_turb = sol[mgt.turbine.OutPresPort.p][end]
+	P_amb_out = sol[mgt.ambientoutpressure.PresPort.p][end]
+	
+	println("Ambient Pressure (Pa): ", P_amb)
+	println("Compressor Outlet Pressure (Pa): ", P_comp)
+	println("Recuperator Cold Side Outlet Pressure (Pa): ", P_rec_cold)
+	println("Combustion Chamber Outlet Pressure (Pa): ", P_cc)
+	println("Turbine Outlet Pressure (Pa): ", P_turb)
+	println("Ambient Outlet Pressure (Pa): ", P_amb_out)
+
+	mdot_comp = sol[mgt.compressor.OutMdotPort.mdot][end]
+	mdot_turb = sol[mgt.turbine.OutMdotPort.mdot][end]
+	isen_comp = sol[mgt.compressor.η_c_is][end]
+	isen_turb = sol[mgt.turbine.eff_t][end]
+	Nred_comp = sol[mgt.compressor.Nred][end]
+	Nred_turb = sol[mgt.turbine.Nred_t][end]
+
+	println("Mass Flow Compressor (kg/s): ", mdot_comp)
+	println("Mass Flow Turbine (kg/s): ", mdot_turb)
+	println("Compressor Isentropic Efficiency: ", isen_comp)
+	println("Turbine Isentropic Efficiency: ", isen_turb)
+	println("Compressor Shaft RPM: ", Nred_comp)
+	println("Turbine Shaft RPM: ", Nred_turb)
+	
+	 # Plot
+    p1 = plot(sol, vars=[mgt.combustionchamber.xT3- 273.15], label="TIT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+	p2 = plot(sol, vars=[mgt.turbine.T4 - 273.15], label="TOT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+	p4 = plot(sol, vars=[mgt.shaft.xω * (60 / (2*pi))], label="Shaft Speed (RPM)", xlabel="Time (s)", ylabel="Angular Velocity (RPM)")
+	p5 = plot(sol, vars=[mgt.shaft.xPload], label="Power Load", xlabel="Time (s)", ylabel="Pload (Watt))")
+    plot(p1, p2, p4, p5, layout=(4,1), size=(1000, 800))
+end
+
+# ╔═╡ 91f0668b-d6a8-42be-abb4-0446fbcdfb57
+let
+    @mtkbuild mgt = ControlledMicroGasTurbineWithLimPID()
+
+    # Initialization
+    u0 = [
+        mgt.recuperator.T_w[1] => 300.15,
+        mgt.recuperator.T_w[2] => 300.15,
+        mgt.recuperator.T_w[3] => 300.15,
+    ]
+
+    # Time Span
+    tspan = (0.0, 1000)
+
+    # Solve
+    prob = ODEProblem(mgt, u0, tspan)
+    sol = solve(prob)
+
+	 # Plot
+    p1 = plot(sol, vars=[mgt.combustionchamber.xT3- 273.15], label="TIT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+	p2 = plot(sol, vars=[mgt.turbine.T4 - 273.15], label="TOT (C)", xlabel="Time (s)", ylabel="Temperature (C)")
+    p3 = plot(sol, vars=[mgt.shaft.OutPowPort.P / 1000], label="Shaft Output Power (kW)", xlabel="Time (s)", ylabel="Residual Power (kW)")
+    p4 = plot(sol, vars=[mgt.shaft.xω * (60 / (2*pi))], label="Shaft Speed (RPM)", xlabel="Time (s)", ylabel="Angular Velocity (RPM)")
+	p5 = plot(sol, vars=[mgt.shaft.xPload], label="Power Load", xlabel="Time (s)", ylabel="Pload (Watt))")
+    plot(p1, p2, p3, p4, p5, layout=(5,1), size=(800, 600))
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -1040,6 +2591,8 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 ControlSystems = "a6e380b2-a6ca-5380-bf3e-84a91bcd477e"
 CoolProp = "e084ae63-2819-5025-826e-f8e611a84251"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
 ModelingToolkitStandardLibrary = "16a59e39-deab-5bd0-87e4-056b12336739"
@@ -1050,6 +2603,7 @@ PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 ControlSystems = "~1.11.1"
 CoolProp = "~0.2.0"
 DifferentialEquations = "~7.15.0"
+Interpolations = "~0.15.1"
 MacroTools = "~0.5.13"
 ModelingToolkit = "~9.49.0"
 ModelingToolkitStandardLibrary = "~2.19.0"
@@ -1063,7 +2617,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.1"
 manifest_format = "2.0"
-project_hash = "03d6316f14d6f96d70d56e8b083a9b33c246687b"
+project_hash = "391b2629c2334d35637a7678ff0200b5cfeff063"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "72af59f5b8f09faee36b4ec48e014a79210f2f4f"
@@ -1194,6 +2748,12 @@ weakdeps = ["SparseArrays"]
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 version = "1.11.0"
+
+[[deps.AxisAlgorithms]]
+deps = ["LinearAlgebra", "Random", "SparseArrays", "WoodburyMatrices"]
+git-tree-sha1 = "01b8ccb13d68535d73d2b0c23e39bd23155fb712"
+uuid = "13072b0f-2c55-5437-9ae7-d433b7a33950"
+version = "1.1.0"
 
 [[deps.BandedMatrices]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra", "PrecompileTools"]
@@ -2095,6 +3655,16 @@ version = "2024.2.1+0"
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 version = "1.11.0"
+
+[[deps.Interpolations]]
+deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
+git-tree-sha1 = "88a101217d7cb38a7b481ccd50d21876e1d1b0e0"
+uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+version = "0.15.1"
+weakdeps = ["Unitful"]
+
+    [deps.Interpolations.extensions]
+    InterpolationsUnitfulExt = "Unitful"
 
 [[deps.IntervalSets]]
 git-tree-sha1 = "dba9ddf07f77f60450fe5d2e2beb9854d9a49bd0"
@@ -3137,6 +4707,16 @@ git-tree-sha1 = "c6ec94d2aaba1ab2ff983052cf6a606ca5985902"
 uuid = "e6cf234a-135c-5ec9-84dd-332b85af5143"
 version = "1.6.0"
 
+[[deps.Ratios]]
+deps = ["Requires"]
+git-tree-sha1 = "1342a47bf3260ee108163042310d26f2be5ec90b"
+uuid = "c84ed2f1-dad5-54f0-aa8e-dbefe2724439"
+version = "0.4.5"
+weakdeps = ["FixedPointNumbers"]
+
+    [deps.Ratios.extensions]
+    RatiosFixedPointNumbersExt = "FixedPointNumbers"
+
 [[deps.RecipesBase]]
 deps = ["PrecompileTools"]
 git-tree-sha1 = "5c3d09cc4f31f5fc6af001c250bf1278733100ff"
@@ -3757,6 +5337,12 @@ git-tree-sha1 = "93f43ab61b16ddfb2fd3bb13b3ce241cafb0e6c9"
 uuid = "2381bf8a-dfd0-557d-9999-79630e7b1b91"
 version = "1.31.0+0"
 
+[[deps.WoodburyMatrices]]
+deps = ["LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "c1a7aa6219628fcd757dede0ca95e245c5cd9511"
+uuid = "efce3f68-66dc-5838-9240-27a6d6f5f9b6"
+version = "1.0.0"
+
 [[deps.XML2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Zlib_jll"]
 git-tree-sha1 = "a2fccc6559132927d4c5dc183e3e01048c6dcbd6"
@@ -4043,109 +5629,133 @@ version = "1.4.1+1"
 """
 
 # ╔═╡ Cell order:
+# ╟─64f97427-bf03-4013-af5c-f4087686fe54
 # ╠═f4a03d13-c8ce-4a00-99da-4ad5eb51c763
 # ╠═52a3a292-ea00-11ef-2cc9-89572f3efeeb
 # ╠═e9ffb64f-1832-4ce4-9c39-ac23be2e7c18
-# ╠═7c65481c-8ab1-4620-a35a-d26ee0e26c16
+# ╠═0777065e-26f8-416a-802f-09978e4709a5
 # ╠═b34531cd-9001-466f-8cd1-532a9573bb80
 # ╠═594eadeb-2501-4c68-8a3b-628381e8d1c3
 # ╠═700edb28-78b6-432e-9b9c-4a7ec8c49ce7
-# ╠═681d82e9-c12e-452b-806f-e5e65c63c509
-# ╠═d46273f5-73fd-4a08-90ae-e059fc45cfc2
-# ╠═00241b50-8276-4d91-8395-932b4553d674
-# ╠═3a0e8e9f-ac6d-4bef-bebb-be60f2c4a074
-# ╠═2b60d2d7-926e-41a9-a16a-6de0ae3684c8
-# ╠═283df373-bc9a-4f88-8b1f-a23b5337ce56
-# ╠═06f248e7-9f54-4ff7-a01a-d4ecc38bb143
-# ╠═3fe36e22-7b35-4bc9-818c-1bdfe1113bae
-# ╠═c79a8222-69aa-45ad-b4a0-74e0ff1b4296
-# ╠═163ea487-46eb-426f-9948-322637235698
-# ╠═b227a7a8-32f5-472a-b3d2-ad5b5c70f620
-# ╠═1c1de152-5d1c-4810-b11e-a1c47549b288
-# ╠═efbe2769-cd3c-4dd7-a6bb-aa4fa053d535
-# ╠═eebd2f3c-a883-480e-bc26-5a6975fc1b99
-# ╠═89b42e03-9e75-4056-94bb-64173615b430
-# ╠═46a1c45c-014c-4b70-8586-4ee911f38a84
-# ╠═32c2e97d-6ec7-480f-ad85-0675fd012a65
-# ╠═adb7a08b-4342-4411-b15b-c3a4f7e4bcc2
-# ╠═1593e565-b3e0-4133-b39a-75dcbb1193a9
-# ╠═fb466028-57c0-44ec-a3d0-7a408442e1a1
-# ╠═950fcd30-957e-4825-a234-55e2b86cf0bd
-# ╠═f7cd13d7-d88a-4803-9e8f-b29c1737ddeb
-# ╠═cf7cf70b-5057-4bce-9ae2-66a6783f4ccc
-# ╠═940ececc-6ddc-4efd-a988-a73a782daed6
-# ╠═28795617-694c-40ac-87c5-07afe309c3c0
-# ╠═39a53894-fb03-43ac-92fd-b18e8330fb71
-# ╠═0a2dd6a6-8d5c-4ca7-b78e-af2caba958f5
-# ╠═ba20246e-6791-465a-be88-971478a803b8
-# ╠═54f02467-88d4-4f52-9714-2f7f8e4f8396
-# ╠═3d4df8ce-ba49-41e7-923f-b6c6503d7ec7
-# ╠═3d270fd8-7bc5-43ea-861f-ab272d67a81d
-# ╠═fc42f8f0-31e4-4cf9-a5e8-64821759fe00
-# ╠═8d03bbe8-c208-4e5b-86f3-2c769efc3d99
-# ╠═ca4f8091-b784-4665-8713-a561e65ee4bb
-# ╠═20996f8e-1c0d-4efe-b1ad-90b69bb0e41d
-# ╠═31ea7715-c1a6-44a4-94b3-a00ffd016622
-# ╠═56b8d818-b827-4cb5-a876-dec2cf90262a
-# ╠═ce852633-8bce-4491-96c2-d11281cfad77
-# ╠═cee71cb3-fa16-4e49-aa77-a9d072eae968
-# ╠═0f23b8bd-241e-4681-af0d-d3927b5527f8
-# ╠═72581724-0ca3-4e63-adfb-169d49d4599c
-# ╠═85de18ca-53e0-4b22-a569-8c99ed8a5fa9
-# ╠═3452a3e3-4bde-42de-87b4-abed90a08aa7
-# ╠═43523756-f44e-4122-bac3-f6e33f01cd33
-# ╠═e529612f-a8c5-404e-9342-1ad7ad9bc50c
-# ╠═0ff5bcab-0389-497b-a254-eb5bdac6e1d5
-# ╠═f7797164-99df-4fd6-92e5-3dd76a8a8f36
-# ╠═d4b88261-657f-447c-989e-ef43e7c0d07e
-# ╠═1d1d961b-1dbd-4d63-a8da-1f7b3a2e9df4
-# ╠═5d5165cf-d7ee-4650-b28a-744aa44ca75b
-# ╠═17d864a3-e4e5-4136-ae14-9fa41ba73659
-# ╠═14d7aa68-928b-46c6-8caa-01e515f610ce
-# ╠═e317faa2-01ab-4856-b63e-56e3282fe06d
-# ╠═75e4bf3a-241e-4a4f-8120-2df2b909ef68
-# ╠═7e6784e3-07b6-4e96-b2a0-e0d0128da90e
-# ╠═d5451d65-9573-483b-b9fe-a79a870e7035
-# ╠═5011f9bf-d2a8-4ea1-8380-e703ddd45993
-# ╠═acbae539-2b69-42b5-b8c5-5a818e9e3f09
-# ╠═cf29de7c-0e1f-46d3-878a-7e5ad3596101
-# ╠═e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
-# ╠═91f82fef-eddf-4715-8576-73efd65bbae9
-# ╠═672d1b69-0d93-4591-bd87-de76979dc0e4
-# ╠═e4fe557b-15ab-4738-8c98-31c61032443d
-# ╠═d1c1fcb2-8139-483f-b4b5-212d8cbe9697
-# ╠═6916e5b4-a2a8-417b-9fa0-86b142b71ba3
-# ╠═74574e2a-148e-4f0e-a9c3-856ff0438584
-# ╠═081c69ab-5e79-4cbd-96d8-dbbe2f092388
-# ╠═fb2f0ba9-b5be-4da5-87cc-a5ed45f6a6ee
-# ╠═36c79577-fba0-4c17-afec-12c5ddd939dd
-# ╠═c34dbbdb-bd7b-4cea-a4ef-dc83fb813a12
-# ╠═49a77da0-f257-4cb8-aa73-1849a21f97be
-# ╠═8fc05447-78c4-40fa-9989-1a7db8e5d2da
-# ╠═bf27a03b-d419-41d0-bccf-5b50a556b2ae
-# ╠═8eec0d23-6036-4b4d-98bc-d384cffb37c1
-# ╠═ae90d075-dc5e-47d9-ab22-c7b7307937f9
-# ╠═b8c60c84-2021-4b0f-943e-32a993000afc
-# ╠═be1fd56d-68af-48c8-b96b-4e2259b64baa
-# ╠═15b188e0-4c3a-48f7-a3e4-4f615b1f0afe
-# ╠═0fa65b73-b35f-4f39-990a-3f837ddfede2
-# ╠═d90569cf-764a-468b-b3a1-7536fef43f59
-# ╠═7428ccb3-ea6f-4a04-ae41-7012aba02431
-# ╠═0fda9b53-a3ec-4deb-bf3f-d57686c41346
-# ╠═cca5c862-f17d-4b2f-b40f-4ea62d908825
-# ╠═34cf9e0c-ea39-4d38-9ec8-b4c38a486cad
-# ╠═0aa86481-1c87-4729-9823-778ce8b062b5
-# ╠═35eb6e17-4cea-45de-b2c5-846983793601
-# ╠═2e1ce1ef-24f4-4581-b6dc-b98df795f5d3
-# ╠═a4876ad9-b931-4eb8-beeb-a5132489d87d
-# ╠═1a0ef76a-a734-4150-8740-6beac6264806
-# ╠═e116de95-6f54-43a2-bfd8-d2db7433ea70
-# ╠═89ca6c60-6dd3-4652-83c9-d81892a5f065
-# ╠═1466e67a-39ec-4997-8193-2948822bf404
-# ╠═48bff90f-da0e-4d1a-a28c-5c61fa073cf9
-# ╠═e46ce2f8-398d-4171-9076-bc8d5bc0e121
-# ╠═60563d50-d507-45b7-930d-3b3ff715eebc
-# ╠═cac61228-aded-45ac-908f-19958d9dbba3
-# ╠═cadc066d-a336-413c-8d8e-3eda5dc95a3b
+# ╠═b9ebd899-9e3a-414d-a60c-c129eb884845
+# ╟─681d82e9-c12e-452b-806f-e5e65c63c509
+# ╟─d46273f5-73fd-4a08-90ae-e059fc45cfc2
+# ╟─00241b50-8276-4d91-8395-932b4553d674
+# ╟─b2bb08e9-8550-4392-b446-20c325fedbe3
+# ╟─3a0e8e9f-ac6d-4bef-bebb-be60f2c4a074
+# ╟─2b60d2d7-926e-41a9-a16a-6de0ae3684c8
+# ╟─283df373-bc9a-4f88-8b1f-a23b5337ce56
+# ╟─06f248e7-9f54-4ff7-a01a-d4ecc38bb143
+# ╟─3fe36e22-7b35-4bc9-818c-1bdfe1113bae
+# ╟─c79a8222-69aa-45ad-b4a0-74e0ff1b4296
+# ╟─5ea4a0a3-b4bb-4490-8e37-4e5bfb5e7a66
+# ╟─163ea487-46eb-426f-9948-322637235698
+# ╟─b227a7a8-32f5-472a-b3d2-ad5b5c70f620
+# ╟─1c1de152-5d1c-4810-b11e-a1c47549b288
+# ╟─efbe2769-cd3c-4dd7-a6bb-aa4fa053d535
+# ╟─eebd2f3c-a883-480e-bc26-5a6975fc1b99
+# ╟─89b42e03-9e75-4056-94bb-64173615b430
+# ╟─46a1c45c-014c-4b70-8586-4ee911f38a84
+# ╟─edd76841-50b2-42ea-85c2-d2874c565f1b
+# ╟─32c2e97d-6ec7-480f-ad85-0675fd012a65
+# ╟─adb7a08b-4342-4411-b15b-c3a4f7e4bcc2
+# ╟─1593e565-b3e0-4133-b39a-75dcbb1193a9
+# ╟─fb466028-57c0-44ec-a3d0-7a408442e1a1
+# ╟─950fcd30-957e-4825-a234-55e2b86cf0bd
+# ╟─3ecd6e53-24ff-4c27-b237-30b996c31e71
+# ╟─13d22477-3051-4efa-9008-932221bf6ee5
+# ╟─f7cd13d7-d88a-4803-9e8f-b29c1737ddeb
+# ╟─cf7cf70b-5057-4bce-9ae2-66a6783f4ccc
+# ╟─940ececc-6ddc-4efd-a988-a73a782daed6
+# ╟─28795617-694c-40ac-87c5-07afe309c3c0
+# ╟─39a53894-fb03-43ac-92fd-b18e8330fb71
+# ╟─0a2dd6a6-8d5c-4ca7-b78e-af2caba958f5
+# ╟─ba20246e-6791-465a-be88-971478a803b8
+# ╟─54f02467-88d4-4f52-9714-2f7f8e4f8396
+# ╟─3d4df8ce-ba49-41e7-923f-b6c6503d7ec7
+# ╟─3d270fd8-7bc5-43ea-861f-ab272d67a81d
+# ╟─fc42f8f0-31e4-4cf9-a5e8-64821759fe00
+# ╟─8d03bbe8-c208-4e5b-86f3-2c769efc3d99
+# ╟─ca4f8091-b784-4665-8713-a561e65ee4bb
+# ╟─20996f8e-1c0d-4efe-b1ad-90b69bb0e41d
+# ╟─31ea7715-c1a6-44a4-94b3-a00ffd016622
+# ╟─56b8d818-b827-4cb5-a876-dec2cf90262a
+# ╟─ce852633-8bce-4491-96c2-d11281cfad77
+# ╟─cee71cb3-fa16-4e49-aa77-a9d072eae968
+# ╟─0f23b8bd-241e-4681-af0d-d3927b5527f8
+# ╟─7d568fe0-f33e-4de1-b14a-af3ae251f565
+# ╟─72581724-0ca3-4e63-adfb-169d49d4599c
+# ╟─85de18ca-53e0-4b22-a569-8c99ed8a5fa9
+# ╟─3452a3e3-4bde-42de-87b4-abed90a08aa7
+# ╟─43523756-f44e-4122-bac3-f6e33f01cd33
+# ╟─e529612f-a8c5-404e-9342-1ad7ad9bc50c
+# ╟─0ff5bcab-0389-497b-a254-eb5bdac6e1d5
+# ╟─f7797164-99df-4fd6-92e5-3dd76a8a8f36
+# ╟─d4b88261-657f-447c-989e-ef43e7c0d07e
+# ╟─1d1d961b-1dbd-4d63-a8da-1f7b3a2e9df4
+# ╟─5d5165cf-d7ee-4650-b28a-744aa44ca75b
+# ╟─17d864a3-e4e5-4136-ae14-9fa41ba73659
+# ╟─14d7aa68-928b-46c6-8caa-01e515f610ce
+# ╟─e317faa2-01ab-4856-b63e-56e3282fe06d
+# ╟─8ad7637b-8b1f-449f-b7a9-ba967546f11a
+# ╠═eda0c6ea-37bc-48de-bbc3-bb7f4e3eabd0
+# ╟─26846735-ae26-4c07-96ba-073b23827294
+# ╟─43b0d385-e8e3-49a9-bbbe-041e66a7015a
+# ╟─e540a42b-fecd-46b3-9e1a-aeb0ce06e52f
+# ╟─00f5f98b-f292-4a58-a4d7-a1e16535f335
+# ╟─97299aad-c6f1-4ca9-bc04-f3809c0950af
+# ╟─75e4bf3a-241e-4a4f-8120-2df2b909ef68
+# ╟─7e6784e3-07b6-4e96-b2a0-e0d0128da90e
+# ╟─d5451d65-9573-483b-b9fe-a79a870e7035
+# ╟─5011f9bf-d2a8-4ea1-8380-e703ddd45993
+# ╟─acbae539-2b69-42b5-b8c5-5a818e9e3f09
+# ╟─cf29de7c-0e1f-46d3-878a-7e5ad3596101
+# ╟─e38cac6e-2ea3-4217-82af-2f8afa7a7ab2
+# ╟─2471950c-0311-45e6-8beb-9ce8068156b9
+# ╟─91f82fef-eddf-4715-8576-73efd65bbae9
+# ╟─672d1b69-0d93-4591-bd87-de76979dc0e4
+# ╟─e4fe557b-15ab-4738-8c98-31c61032443d
+# ╟─f4d42d42-92ab-4225-9a80-dfca5d7ebab8
+# ╟─393aaac9-eaf2-4feb-be85-0eddd9f9def2
+# ╟─fa9a32f6-b750-4c11-b0e5-0478ab783807
+# ╟─081c69ab-5e79-4cbd-96d8-dbbe2f092388
+# ╟─32b6d965-9dd6-45be-a4ec-27d4b6d7f0e1
+# ╟─b5a4429b-9fcf-4273-a201-71719fde0b70
+# ╟─42430338-3ae1-4627-a799-45c14a0bb019
+# ╠═554b968f-0f5e-401d-a1ed-2e1467764992
+# ╠═f6be609b-fa10-4c09-8e9d-9d1c1c66479e
+# ╠═ada11575-9002-420d-9dd5-743ea0039af1
+# ╟─cb533bc0-4e11-4741-b8dd-f9f14d5b02cf
+# ╟─a082757b-48a4-4d57-b784-0af88ce03857
+# ╟─fb8e89a3-f92a-450f-9894-ab6ddb5e3d30
+# ╠═e1737a98-77de-4f0e-9b17-cb0b63de7b15
+# ╟─b38fa1c0-c6ae-4ddb-9d99-0d580a355895
+# ╠═5516ebd8-ca0b-4905-b3db-10c6131feb3a
+# ╠═b7e2a1e4-6bc8-41b6-bb0a-4578eab7492a
+# ╟─4303de6e-7c17-4406-985d-8992341cd859
+# ╟─aa1989b2-8b6e-4f8c-8c90-035e56c4ce67
+# ╟─f9fe72c8-5419-4b6e-bd94-e3cd94d8fa9b
+# ╟─b2019e1f-d197-4959-bdfe-1bbd358b6933
+# ╟─23fbbf84-a884-4f21-9b99-bc8a9cb359c7
+# ╟─c9d89823-68d5-427b-a477-6ff5c67e720a
+# ╟─578cfa59-33d0-4f89-9909-7c3c4bcdb060
+# ╟─4991e356-8b07-4221-940c-17bcbe38107e
+# ╟─41b8f15f-f4f4-402f-ac07-8570fe5fb153
+# ╟─5efb8419-d98a-4b3c-992f-fd479eb11012
+# ╟─e7e53922-b324-4ee3-a100-f59cf75e0ff4
+# ╟─8fec2d77-efb4-46ec-817a-9744a58759d4
+# ╟─78c34865-3496-47b1-94bd-966c292d0322
+# ╠═9fce2cb3-d33b-4e8d-81b4-0a28d559c3da
+# ╟─0617c4be-e83e-4d55-a8f3-83f61c121758
+# ╟─892cbfaf-a36f-4cc2-9fb7-234ec0d3868a
+# ╟─8f71695b-2ffe-4941-98a4-045c6ff1aaf0
+# ╟─46cf0238-17fc-4f5c-9225-c25a2efeb40b
+# ╟─80495b38-e463-4812-b663-c4b393032a3e
+# ╟─2a095094-5f7a-4060-844d-cbc549ddfa38
+# ╟─074e881d-fc4b-4d19-bbfa-0a61dac6b3e6
+# ╠═6af715d5-1876-4d9f-9271-743cf832ce80
+# ╠═94abb64a-34ff-45d1-a6fd-62de3060a778
+# ╠═2eedaea6-b94f-4aed-983a-fe70b2812dbf
+# ╠═91f0668b-d6a8-42be-abb4-0446fbcdfb57
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
